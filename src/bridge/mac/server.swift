@@ -287,6 +287,19 @@ func audioControl(_ path: String, _ body: [String: Any]) throws -> String {
   }
 }
 
+/// POST /notifications/dismiss: the Mac's banners and alerts on screen close
+/// (notifications.swift), only while an OmacVM.app VM is in front: in full
+/// screen they sit over the VM, where nothing in it reaches them. Omarchy's
+/// "Dismiss all notifications" asks for it (guest/omacvm_vm.lua).
+func dismissNotifications() throws -> (found: Int, closed: Int) {
+  // Windows and the front app: read on the main thread (this one is a connection's).
+  guard DispatchQueue.main.sync(execute: { VMScreens.front() != nil }) else { throw APIError(409, "no OmacVM.app VM in front") }
+  guard let r = MacNotifications.closeOnScreen() else {
+    throw APIError(403, "OmacVM Bridge needs Accessibility (System Settings > Privacy & Security > Accessibility)")
+  }
+  return r
+}
+
 /// GET or POST /display/external-brightness: the Mac display the VM (output)
 /// is on. Everything from the VM is checked: a box (x, y, width, height: an
 /// OmacVM.app output from its layout) only picks among the displays that show
@@ -484,10 +497,21 @@ func handle(_ fd: Int32, peer: String) {
     } catch {
       respond(fd, 500, ["error": "\(error)"])
     }
+  case ("POST", "/notifications/dismiss"):
+    do {
+      let r = try dismissNotifications()
+      log("/notifications/dismiss from \(peer): closed \(r.closed) of \(r.found)")
+      respond(fd, 200, ["closed": r.closed])
+    } catch let e as APIError {
+      log("/notifications/dismiss from \(peer) failed: \(e.message)")
+      respond(fd, e.status, ["error": e.message])
+    } catch {
+      respond(fd, 500, ["error": "\(error)"])
+    }
   case ("POST", "/power"), ("POST", "/join"), ("POST", "/disconnect"):
     respond(fd, 501, ["error": "Wi-Fi control is not implemented yet (stage 2)"])
   case (_, "/state"), (_, "/scan"), (_, "/audio"), (_, "/display"), (_, "/bluetooth"), (_, "/timezone"), (_, "/wifi/password"), (_, "/events"),
-       (_, "/display/external"), (_, "/display/external-brightness"):
+       (_, "/display/external"), (_, "/display/external-brightness"), (_, "/notifications/dismiss"):
     respond(fd, 405, ["error": "method not allowed"])
   default:
     respond(fd, 404, ["error": "not found"])
