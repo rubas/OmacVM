@@ -3,6 +3,13 @@
 What's new in each OmacVM release. The release notes on GitHub say the same
 in more words.
 
+## Unreleased
+
+- **A key of your own out to macOS.** A Hyprland binding can leave the full-screen VM as ⌃⌥ Esc
+  does: bind the custom event `omacvm-escape`, such as
+  `hl.bind("SUPER + ALT + ESCAPE", hl.dsp.event("omacvm-escape"))`. ⌃⌥ Esc still takes you back
+  in. It comes with Update VM.
+
 ## 3.4.5
 
 Mission Control is a normal option now; faster disks on Omarchy 4.5; new VMs no longer need about
