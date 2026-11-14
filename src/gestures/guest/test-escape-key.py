@@ -4,8 +4,9 @@
 against a made-up Hyprland event socket. No VM, no uinput.
   Hyprland's custom event omacvm-escape -> "L" to the Mac, once per event,
   also when the event comes in pieces; other events and other custom events
-  -> nothing; not connected to the Mac yet -> nothing; Hyprland's event
-  socket gone and back -> connected again, "L" again.
+  -> nothing; not connected to the Mac yet -> nothing; Hyprland's folder
+  gone while the daemon looks for it, or its event socket gone and back ->
+  connected again, "L" again.
 """
 import importlib.machinery
 import importlib.util
@@ -45,7 +46,18 @@ def check(ok, what):
 
 # ---- the made-up Hyprland: only its event socket ----
 tmp = tempfile.mkdtemp()
-g.hypr_socket = lambda: os.path.join(tmp, ".socket.sock")
+looks = []
+
+
+def hypr_socket():
+    """The first look finds Hyprland's folder gone between its look and its stat (a logout)."""
+    looks.append(1)
+    if len(looks) == 1:
+        raise FileNotFoundError("/run/user/1000/hypr/gone")
+    return os.path.join(tmp, ".socket.sock")
+
+
+g.hypr_socket = hypr_socket
 evsrv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 evsrv.bind(os.path.join(tmp, ".socket2.sock"))
 evsrv.listen(4)
@@ -84,7 +96,7 @@ def got(n, wait=1.0):
 
 sent = []
 threading.Thread(target=g.ESCAPE.watch, daemon=True).start()
-check(connected(), "the daemon listens to Hyprland's event socket")
+check(connected(), "Hyprland's folder gone at the first look: the daemon looks again and listens to its event socket")
 
 event(b"custom>>omacvm-escape\n")
 check(got(1, wait=0.3) == [], "not connected to the Mac yet: nothing sent")

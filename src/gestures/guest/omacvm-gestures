@@ -1267,14 +1267,15 @@ class EscapeKey:
         """Hyprland's event socket for good (Hyprland may start, stop and
         start again)."""
         while True:
-            sock = hypr_socket()
-            if sock:
-                try:
+            try:
+                # Inside the try: Hyprland's folder can go between its look and its stat.
+                sock = hypr_socket()
+                if sock:
                     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as ev:
                         ev.connect(os.path.join(os.path.dirname(sock), ".socket2.sock"))
                         self.events(ev)
-                except OSError:
-                    pass
+            except OSError:
+                pass
             time.sleep(1)
 
     def events(self, ev):
