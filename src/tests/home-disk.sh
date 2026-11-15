@@ -74,8 +74,10 @@ if grep -q '^home_disk_line()' "$T/fn.sh" && bash -n "$T/fn.sh"; then
     "fail	the home disk (nvme1n1) is attached, but /home is on /dev/nvme0n1p2[/@home] (btrfs): the steps are in docs/routes/app.md, \"A home disk for a VM you have\"" \
     "$(home_disk_line /dev/nvme1n1 '/dev/nvme0n1p2[/@home]' btrfs rw,noatime 1 0 0)"
   expect "xfs that stopped after an error: fail" fail "$(home_disk_line /dev/nvme1n1 /dev/nvme1n1 xfs rw,noatime,discard "" 1 1 | cut -f1)"
-  expect "mounted without discard: warn" \
-    "warn	/home on xfs on nvme1n1, mounted without discard: what is deleted there keeps its space on the Mac until the weekly trim" \
+  expect "mounted without discard, fstrim.timer enabled: ok" "ok	/home on xfs on nvme1n1 (data.img), 187.5 of 200.0 GiB free; trim by fstrim.timer" \
+    "$(home_disk_line /dev/nvme1n1 /dev/nvme1n1 xfs rw,noatime,attr2,inode64 1 $((375 * G / 2)) $((200 * G)) 1)"
+  expect "mounted without discard, fstrim.timer off: warn" \
+    "warn	/home on xfs on nvme1n1, mounted without discard, and fstrim.timer is off: what is deleted there keeps its space on the Mac (systemctl enable --now fstrim.timer)" \
     "$(home_disk_line /dev/nvme1n1 /dev/nvme1n1 xfs rw,noatime 1 1 1)"
 else
   echo "FAIL check.sh has no home_disk_line, or it does not parse"; fail=1

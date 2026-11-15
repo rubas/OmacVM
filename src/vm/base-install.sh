@@ -10,8 +10,11 @@
 # With a home disk (OmacVM.app's data.img: a second NVMe disk, serial
 # omacvm-home; docs/adr/0073) /home is that whole disk, on xfs, and there is
 # no @home: files that change in place (databases, build trees) cost btrfs
-# its copies on write and its compression. noatime, discard (what is deleted
-# goes back to the Mac as it does from btrfs), and systemd grows it into a
+# its copies on write and its compression. noatime, and no discard on our
+# hybrid: xfs sends one for each freed extent, QEMU punches each out of
+# data.img, and SQLite with a rollback journal took 2.96 s instead of 1.96 s
+# for 2000 synced transactions (Mac mini M4 Pro, 2026-11-15). fstrim.timer
+# gives what is deleted back to the Mac. systemd grows it into a
 # longer disk when it mounts it.
 # OMACVM_OMARCHY=4.5 (OmacVM.app's VMs): the new system comes from Omarchy's
 # snapshot of Arch Linux ARM (arm-$OMARCHY_CHANNEL-mirror.omarchy.org, the
@@ -52,7 +55,7 @@ H=$(lsblk -dnpo NAME,SERIAL | awk '$2 == "omacvm-home" { print $1; exit }')
 D=$(lsblk -dnpo NAME,TRAN,SERIAL | awk '$2 == "nvme" && $3 != "omacvm-home" { print $1; exit }')
 [[ -b ${D:-} ]] || { echo "base-install: no NVMe disk found" >&2; exit 1; }
 P=${D}p
-HOME_OPT=noatime,discard
+HOME_OPT=noatime
 
 log "clock"
 # Package signatures and HTTPS need a right clock. The live system's comes from
