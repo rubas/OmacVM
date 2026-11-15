@@ -14,9 +14,9 @@ import Security
 /// the access the person already gave the app. Nothing new is asked.
 ///
 /// The app's access is not lent to anything else: only when OmacVM Bridge
-/// of this identity, signed like this app, started it (its parent); only
-/// this app's own omacvm; only the commands the Bridge runs; a fixed
-/// environment. No window, no AppKit.
+/// of this identity, signed like this app or with OmacVM's Developer ID,
+/// started it (its parent); only this app's own omacvm; only the commands
+/// the Bridge runs; a fixed environment. No window, no AppKit.
 ///
 /// The parent check alone is not enough: a process can start this and then
 /// exec the signed Bridge in its own place, and the check passes. So nothing
@@ -114,10 +114,43 @@ enum ControlRun {
         return Signer(id: id, team: d[kSecCodeInfoTeamIdentifier as String] as? String)
     }
 
+    /// OmacVM's team, whose Developer ID signs OmacVM Bridge in every release.
+    /// Not for upstream: a build that seals this launcher with another team
+    /// (rubas/fleet's hybrid) keeps the release's Bridge, signed by this team.
+    static let omacvmTeam = "722686Y34B"
+
+    /// OmacVM Bridge of this identity, signed with the Developer ID of
+    /// OmacVM's team. A requirement, so macOS checks the chain up to Apple and
+    /// the team of the leaf certificate, not only the team a signature names.
+    static func omacvmBridge(test: Bool) -> String {
+        "anchor apple generic and identifier \"\(bridgeID(test: test))\" and certificate 1[field.1.2.840.113635.100.6.2.6] exists"
+            + " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"\(omacvmTeam)\""
+    }
+
+    /// The running process pid meets the requirement, checked by macOS now.
+    static func satisfies(pid: pid_t, _ requirement: String) -> Bool {
+        var code: SecCode?
+        var req: SecRequirement?
+        guard SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributePid: pid] as CFDictionary, [], &code) == errSecSuccess, let code,
+              SecRequirementCreateWithString(requirement as CFString, [], &req) == errSecSuccess, let req else { return false }
+        return SecCodeCheckValidity(code, [], req) == errSecSuccess
+    }
+
     /// The parent may run this: OmacVM Bridge of this identity, signed by the same team as this app.
     static func parentAllowed(parent: Signer?, me: Signer?, test: Bool) -> Bool {
         guard let parent, let me else { return false }
         return parent.id == bridgeID(test: test) && parent.team == me.team
+    }
+
+    /// The parent is OmacVM Bridge of this identity, signed by the same team
+    /// as this app. With a team, a requirement, as in omacvmBridge; an ad hoc
+    /// app (no team) takes an ad hoc Bridge (parentAllowed).
+    static func sameTeamAllowed(parent: pid_t, test: Bool) -> Bool {
+        guard let me = signer(pid: nil) else { return false }
+        if let team = me.team {
+            return satisfies(pid: parent, "anchor apple generic and identifier \"\(bridgeID(test: test))\" and certificate leaf[subject.OU] = \"\(team)\"")
+        }
+        return parentAllowed(parent: signer(pid: parent), me: me, test: test)
     }
 
     /// Runs the command and exits with its status (126: refused, 127: did not start).
@@ -126,7 +159,8 @@ enum ControlRun {
             FileHandle.standardError.write(Data("control-run: \(why)\n".utf8))
             exit(126)
         }
-        guard parentAllowed(parent: signer(pid: getppid()), me: signer(pid: nil), test: test) else {
+        let parent = getppid()
+        guard satisfies(pid: parent, omacvmBridge(test: test)) || sameTeamAllowed(parent: parent, test: test) else {
             refuse("only OmacVM Bridge runs this")
         }
         let ownCLI = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/omacvm/omacvm").path

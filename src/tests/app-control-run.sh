@@ -2,10 +2,11 @@
 # OmacVM.app's `--control-run` (ControlRun.swift): OmacVM Bridge runs the
 # control centre's omacvm for the app's VMs through the app, so macOS counts
 # the run as the app's (a VMs folder on an external drive). It runs only for
-# OmacVM Bridge (its parent, signed like the app), only the app's own omacvm,
-# only the Bridge's commands, with a fixed environment; the exit status comes
-# back. Builds ControlRun.swift into a fake app (ad hoc signed) and a fake
-# Bridge parent; no window, no VM, no prompt.
+# OmacVM Bridge (its parent, signed like the app or with OmacVM's Developer
+# ID), only the app's own omacvm, only the Bridge's commands, with a fixed
+# environment; the exit status comes back. Builds ControlRun.swift into a
+# fake app (ad hoc signed) and a fake Bridge parent; no window, no VM, no
+# prompt.
 #   src/tests/app-control-run.sh
 set -uo pipefail
 R=$(cd "$(dirname "$0")/../.." && pwd)
@@ -112,6 +113,57 @@ out=$("$T/bridge" "$EXE" --control-run "$CLI" enable fast-network --vm A 2>&1)
 expect "OMACVM_ADMIN_PROMPT not set: none" "admin=none" "$(sed -n 4p <<<"$out")"
 out=$(PATH=$T/evil:/usr/bin:/bin "$T/swap" "$T/bridge" "$EXE" "$CLI" 2>&1)
 expect "the Bridge exec'd in place of the caller: still the fixed PATH" "path=$FIXED" "$(grep -o '^path=[^ ]*' <<<"$out")"
+
+# OmacVM Bridge of a release, signed with OmacVM's Developer ID, as the parent
+# of this ad hoc app, whose team differs (rubas/fleet's hybrid: a launcher of
+# another team). The release's Bridge never runs here: held.c execs it in its
+# own place suspended, and the app starts from held's child. Skipped without
+# a release on this Mac (OMACVM_RELEASE: its OmacVM.app).
+RELEASE_BRIDGE=${OMACVM_RELEASE:-/Applications/OmacVM.app}/Contents/Helpers/OmacVMBridge.app
+if codesign --verify -R='anchor apple generic and identifier "org.omacvm.bridge" and certificate leaf[subject.OU] = "722686Y34B"' "$RELEASE_BRIDGE" 2>/dev/null; then
+  cat > "$T/held.c" <<'EOF'
+#include <libproc.h>
+#include <limits.h>
+#include <spawn.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+extern char **environ;
+int main(int argc, char **argv) {   /* PARENT APP CLI CMD... */
+  char want[PATH_MAX], path[PROC_PIDPATHINFO_MAXSIZE];
+  pid_t me = getpid();
+  if (argc < 5 || !realpath(argv[1], want)) return 64;
+  if (fork() == 0) {
+    for (int i = 0; i < 500 && !(proc_pidpath(me, path, sizeof path) > 0 && !strcmp(path, want)); i++) usleep(10000);
+    argv[1] = argv[2]; argv[2] = (char *)"--control-run";
+    execv(argv[1], argv + 1); _exit(1);
+  }
+  posix_spawnattr_t a;
+  posix_spawnattr_init(&a);
+  posix_spawnattr_setflags(&a, POSIX_SPAWN_SETEXEC | POSIX_SPAWN_START_SUSPENDED);
+  char *b[] = {argv[1], 0};
+  pid_t p;
+  posix_spawn(&p, argv[1], 0, &a, b, environ);
+  return 1;
+}
+EOF
+  xcrun clang -O2 -o "$T/held" "$T/held.c"
+  # A subshell, whose exit, also by a signal, ends the suspended Bridge:
+  # nothing else would.
+  held() (   # CMD..., as the release's Bridge would run it; prints the run's output
+    rm -f "$T/held.out"
+    "$T/held" "$RELEASE_BRIDGE/Contents/MacOS/$(plutil -extract CFBundleExecutable raw -o - "$RELEASE_BRIDGE/Contents/Info.plist")" "$EXE" "$CLI" "$@" >"$T/held.out" 2>&1 &
+    pid=$!
+    trap "kill -9 $pid 2>/dev/null" EXIT
+    for _ in $(seq 50); do grep -qs -e '^args:' -e '^control-run:' "$T/held.out" && break; sleep 0.1; done
+    kill -9 "$pid"; wait "$pid" 2>/dev/null
+    sed -n 1p "$T/held.out"
+  )
+  expect "the release's Bridge (OmacVM's Developer ID) for an app of another team: runs" "args: vms --json" "$(held vms --json)"
+  expect "the release's Bridge for the test identity's app: refused" "control-run: only OmacVM Bridge runs this" "$(AS_TEST=1 held vms --json)"
+else
+  echo "skip the release's Bridge: none at $RELEASE_BRIDGE"
+fi
 
 refused() {   # WHAT, then the command
   local what=$1 out rc; shift
