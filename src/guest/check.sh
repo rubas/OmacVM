@@ -747,22 +747,25 @@ disk_sched_line() {
   if [[ -n $later ]]; then printf 'warn\t%s\n' "$s on $d, set by a rule read after OmacVM's:$later"
   else printf 'warn\t%s\n' "$s on $d, not none: restart the VM, or run omacvm apply"; fi
 }
-# home_disk_line DISK SOURCE FSTYPE OPTIONS READS FREE SIZE: the "home disk" line, "status<TAB>detail",
+# home_disk_line DISK SOURCE FSTYPE OPTIONS READS FREE SIZE TRIM: the "home disk" line, "status<TAB>detail",
 # for a VM with one (OmacVM.app's data.img: the disk with the serial omacvm-home, docs/adr/0073).
 # DISK is that disk (e.g. /dev/nvme1n1); SOURCE, FSTYPE and OPTIONS are what is mounted at /home
 # (findmnt), READS is 1 when /home lists (xfs that stopped after an error still shows as mounted and
-# answers every read with an error), FREE and SIZE are df's bytes. src/vm/base-install.sh makes
-# the file system and its fstab line; discard gives what is deleted back to the Mac at once.
+# answers every read with an error), FREE and SIZE are df's bytes, TRIM is 1 when fstrim.timer is
+# enabled. src/vm/base-install.sh makes the file system and its fstab line. What is deleted goes
+# back to the Mac at once with discard, or with the timer's next trim, as our hybrid mounts
+# without discard. With neither, it keeps its space on the Mac.
 home_disk_line() {
-  local d=${1#/dev/} src=$2 fs=$3 opt=$4 reads=$5 free=$6 size=$7
+  local d=${1#/dev/} src=$2 fs=$3 opt=$4 reads=$5 free=$6 size=$7 trim=${8:-} back=discard
   if [[ $src != "/dev/$d" || $fs != xfs ]]; then
     printf 'fail\t%s\n' "the home disk ($d) is attached, but /home is on ${src:-nothing}${fs:+ ($fs)}: the steps are in docs/routes/app.md, \"A home disk for a VM you have\""
   elif [[ $reads != 1 ]]; then
     printf 'fail\t%s\n' "/home on $d does not read: xfs stopped after an error (journalctl -k -g XFS)"
-  elif [[ ,$opt, != *,discard,* ]]; then
-    printf 'warn\t%s\n' "/home on xfs on $d, mounted without discard: what is deleted there keeps its space on the Mac until the weekly trim"
+  elif [[ ,$opt, != *,discard,* && $trim != 1 ]]; then
+    printf 'warn\t%s\n' "/home on xfs on $d, mounted without discard, and fstrim.timer is off: what is deleted there keeps its space on the Mac (systemctl enable --now fstrim.timer)"
   else
-    printf 'ok\t%s\n' "/home on xfs on $d (data.img), $(awk -v f="$free" -v s="$size" 'BEGIN { printf "%.1f of %.1f GiB free", f / 1073741824, s / 1073741824 }'); discard"
+    [[ ,$opt, == *,discard,* ]] || back="trim by fstrim.timer"
+    printf 'ok\t%s\n' "/home on xfs on $d (data.img), $(awk -v f="$free" -v s="$size" 'BEGIN { printf "%.1f of %.1f GiB free", f / 1073741824, s / 1073741824 }'); $back"
   fi
 }
 # zram_line SIZE_BYTES MEMTOTAL_KB DECIDER OURS: the "zram swap" line, "status<TAB>detail".
@@ -1242,7 +1245,8 @@ hd=$(lsblk -dnpo NAME,SERIAL 2>/dev/null | awk '$2 == "omacvm-home" { print $1; 
 if [[ -n $hd ]]; then
   read -r hsrc hfs hopt < <(findmnt -no SOURCE,FSTYPE,OPTIONS /home 2>/dev/null)
   read -r hf hs < <(df --output=avail,size --block-size=1 /home 2>/dev/null | tail -n 1)
-  r=$(home_disk_line "$hd" "$hsrc" "$hfs" "$hopt" "$(ls /home >/dev/null 2>&1 && echo 1)" "${hf:-0}" "${hs:-0}")
+  r=$(home_disk_line "$hd" "$hsrc" "$hfs" "$hopt" "$(ls /home >/dev/null 2>&1 && echo 1)" "${hf:-0}" "${hs:-0}" \
+    "$(systemctl is-enabled -q fstrim.timer 2>/dev/null && echo 1)")
   case ${r%%$'\t'*} in
     ok) ok "home disk" "${r#*$'\t'}" ;;
     warn) warn "home disk" "${r#*$'\t'}" ;;
