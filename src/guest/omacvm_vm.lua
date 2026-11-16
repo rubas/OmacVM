@@ -69,3 +69,21 @@ local function overrides_first()
   hl.env("PATH", table.concat(kept, ":"))
 end
 overrides_first()
+
+-- The Mac's notifications go with Omarchy's own "Dismiss all notifications"
+-- (Super+Shift+comma, Omarchy 4.0 and 4.5). With the VM full screen macOS
+-- shows its banners and alerts over it, where nothing in the VM reaches them;
+-- the Bridge closes them (POST /notifications/dismiss, only while a VM is in
+-- front). A second bind on Omarchy's keys: Hyprland runs every bind a key
+-- matches, so Omarchy's own still dismisses the VM's notifications, and
+-- without a description Omarchy's keybindings menu lists the key once. While
+-- the Bridge is off its client is gone (guest/off.sh): the keys do Omarchy's
+-- part only, and nothing reaches the Mac. Can go when macOS keeps its
+-- notifications off a full-screen app.
+local BRIDGE_CLIENT = "/usr/local/bin/omacvm-bridge"
+hl.bind("SUPER + SHIFT + comma", function()
+  local client = io.open(BRIDGE_CLIENT, "r")
+  if not client then return end
+  client:close()
+  hl.exec_cmd(BRIDGE_CLIENT .. " notifications dismiss")
+end)
