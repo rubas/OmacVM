@@ -5,6 +5,14 @@ in more words.
 
 ## Unreleased
 
+- **The Mac's own cursor as the VM's pointer** (hidden, off: `defaults write org.omacvm.app
+  macPointer -bool true`). The setting has been in the app since 3.2 and did nothing, because
+  Hyprland could not put its pointer on a virtual GPU's cursor plane. Now the VM builds Omarchy's
+  aquamarine again with a patch that sends the pointer's hotspot, and uses it only in a start with
+  the setting. The pointer then moves as the Mac's cursor does, without waiting for the VM, and
+  looks the same. To switch it on: the setting, start the VM, Update VM, start it again. Dragged
+  windows follow the pointer a little later than before. `omacvm check` has a "Mac pointer" line;
+  ADR 0074.
 - **A disk of its own for your home folder** (off by default). `omacvm build --home-gb N` builds a
   VM whose `/home` is a second disk, `data.img`, on xfs; the system stays on btrfs with its update
   snapshots. btrfs copies a block before it changes it and compresses what it writes, which costs
