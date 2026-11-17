@@ -16,6 +16,7 @@ WORDS='\b(parallels|prlctl|prl_[a-z]+|utm|utmctl|vmware|vmrun|vmwgfx|vmx|open-vm
 ALLOW='CHANGELOG.md	*	the history
 docs/adr/	*	decisions as they were made (ADR 0071 records the retirement)
 app/runtime/patches/	*	QEMU patches: their text is the runtime cache key
+src/app/guest/aquamarine/aquamarine-cursor-plane-hotspot.patch	*	aquamarine'"'"'s patch: the kernel'"'"'s list of virtual GPUs, not a route
 src/lib/retired.sh	*	the retired helper: lists and refuses those VMs
 src/bridge/mac/retired.swift	*	the Bridge on those routes'"'"' addresses: the move text only
 src/bridge/mac/tests/retired/	*	its test and the 3.3.0 guest clients it runs (byte copies)
