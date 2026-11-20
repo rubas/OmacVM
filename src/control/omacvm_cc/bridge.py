@@ -322,7 +322,8 @@ class Bridge:
         (never the Bridge): {"accessibility", "output", "balance"}; body: {"read": True}
         or {"press": NAME} add "devices", the outputs macOS lists, AirPlay
         speakers too (the app opens Control Center for it, and a press waits
-        for the speaker: a longer timeout); {"balance": 0..1} sets it."""
+        for the speaker: a longer timeout); {"balance": 0..1} sets it;
+        {"allow": True} opens the Mac's settings where OmacVM is allowed."""
         path = "/omacvm/app/sound"
         if body is None:
             return self.call("GET", path, timeout=timeout)

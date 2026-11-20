@@ -16,12 +16,14 @@
                              OmacVM.app on a Mac with an XDR display: the VM's
                              main window up to 2x as bright (the Display panel's
                              switch); use with care: much more battery
-  omacvm sound [read | press NAME | balance PERCENT] [--json]
+  omacvm sound [read | press NAME | balance PERCENT | allow] [--json]
                              OmacVM.app: the Mac's sound outputs as macOS lists
                              them, AirPlay speakers too (read), a switch to one
                              or, for an AirPlay speaker that plays, away from it
-                             (press), and the output's balance (0 left, 50
-                             centre, 100 right); the audio panel runs it
+                             (press), the output's balance (0 left, 50 centre,
+                             100 right), and the Mac's settings where OmacVM is
+                             allowed to read that list (allow); the audio
+                             panel runs it
   omacvm --version
   omacvm --window            what the menu, the bar item and the launcher run:
                              as omacvm, and the window waits for Return before
@@ -154,8 +156,8 @@ def extra_brightness(args: list) -> int:
 
 def sound(args: list) -> int:
     """The Mac's sound beyond OmacVM Bridge's /audio (the audio panel runs
-    this): the outputs macOS lists, AirPlay speakers too, a press of one, and
-    the output's balance. The app answers on this VM's control port; nothing
+    this): the outputs macOS lists, AirPlay speakers too, a press of one, the
+    output's balance, and the Mac's Accessibility settings (allow). The app answers on this VM's control port; nothing
     goes to the Bridge. For a read or a press the app opens Control Center on
     the Mac (off screen) for about a second, and a press waits until macOS
     has connected the speaker. Exit 0 done, 1 no answer or an app without it,
@@ -164,12 +166,14 @@ def sound(args: list) -> int:
     the VM's window not in front, no such device, no balance)."""
     import json
 
-    usage = "omacvm sound [read | press NAME | balance PERCENT] [--json]"
+    usage = "omacvm sound [read | press NAME | balance PERCENT | allow] [--json]"
     as_json = args[-1:] == ["--json"]   # last, so a device may have any name
     words = args[:-1] if as_json else list(args)
     body, timeout = None, 3.0
     if words == ["read"]:
         body, timeout = {"read": True}, 10.0
+    elif words == ["allow"]:
+        body = {"allow": True}
     elif len(words) == 2 and words[0] == "press" and words[1]:
         body, timeout = {"press": words[1]}, 25.0
     elif len(words) == 2 and words[0] == "balance":

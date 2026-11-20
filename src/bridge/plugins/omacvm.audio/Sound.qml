@@ -10,7 +10,7 @@ import Quickshell.Io
 // For the list and for a press the app opens Control Center on the Mac, off
 // screen. That takes about a second, and Control Center has the Mac's
 // keyboard meanwhile, so no key reaches the VM. So the list is asked only
-// when the panel needs it, never on a timer, and a press waits in the app
+// when the panel asks, never on a timer, and a press waits in the app
 // until macOS has connected the speaker: the request on its way is the row's
 // "connecting".
 Item {
@@ -53,6 +53,9 @@ Item {
   function read() { run(["read"], "") }
 
   function press(name) { run(["press", name], name) }
+
+  // The Mac's settings where the person lets OmacVM read the list.
+  function allow() { Quickshell.execDetached(command.concat(["allow"])) }
 
   function run(words, name) {
     if (listProc.running) return

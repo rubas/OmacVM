@@ -10,6 +10,9 @@ import Foundation
 ///   POST {"read": true}        the list: + {"devices": [{"name", "selected"}], "ms"}
 ///   POST {"press": NAME}       presses that device's row, answers the list once macOS is done
 ///   POST {"balance": 0...1}    0 left, 0.5 centre, 1 right
+///   POST {"allow": true}       opens the Mac's Accessibility settings, where
+///                              the person turns OmacVM on (macOS lists it
+///                              there once it has asked, which this does)
 ///
 /// "output" is the CoreAudio UID of the Mac's output, as the Bridge's /audio
 /// names it (null: none), so the panel knows which output a list's
@@ -38,6 +41,7 @@ public enum SoundGuest {
         case read
         case press(String)
         case balance(Double)
+        case allow
     }
 
     public struct Refusal: Error, Equatable {
@@ -60,6 +64,7 @@ public enum SoundGuest {
 
     private static func request(_ o: [String: Any]) -> Request? {
         if let v = o["read"] as? NSNumber, isBool(v), v.boolValue { return .read }
+        if let v = o["allow"] as? NSNumber, isBool(v), v.boolValue { return .allow }
         if let name = o["press"] as? String, (1...255).contains(name.count),
            !name.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) { return .press(name) }
         if let v = o["balance"] as? NSNumber, !isBool(v), (0...1).contains(v.doubleValue) { return .balance(v.doubleValue) }
@@ -81,7 +86,7 @@ public enum SoundGuest {
 
     public static func error(_ code: String) -> String {
         switch code {
-        case "bad-request": return "send {\"read\": true}, {\"press\": NAME} or {\"balance\": 0...1}"
+        case "bad-request": return "send {\"read\": true}, {\"press\": NAME}, {\"balance\": 0...1} or {\"allow\": true}"
         case "not-front": return "only while this VM's window is in front"
         case "accessibility": return "OmacVM is not allowed under Accessibility on the Mac"
         case "busy": return "Control Center is open on the Mac, or OmacVM is still at the last request"
@@ -123,6 +128,10 @@ public final class SoundService: @unchecked Sendable {
         case .failure(let r):
             return refuse(r)
         case .success(.state):
+            return (200, state())
+        case .success(.allow):
+            guard front() else { return refuse(SoundGuest.Refusal(409, "not-front")) }
+            if !SoundPicker.trusted { SoundPicker.askAccess() }
             return (200, state())
         case .success(.balance(let value)):
             guard front() else { return refuse(SoundGuest.Refusal(409, "not-front")) }

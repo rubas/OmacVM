@@ -71,6 +71,8 @@ ADR 0031), so it works with every Bridge:
   is done: the row's checkmark changed, or the list moved and is as before
   again (the speaker did not connect), or after 15 s.
 - `POST {"balance": 0...1}`: CoreAudio.
+- `POST {"allow": true}`: asks macOS for Accessibility, which lists OmacVM
+  there, and opens that list in System Settings. Only the person turns it on.
 
 For a read or a press the app opens Control Center, moves it off screen,
 opens the Sound list, and closes Control Center again on every way out
@@ -88,23 +90,32 @@ the VM. The route is the feature bridge's: with it off the app answers as one
 without the route. There is no rate limit: a VM in front that asks in a loop
 keeps the Mac's keyboard away until the person clicks out of it.
 
-In the VM, `omacvm sound [read | press NAME | balance PERCENT] --json` asks
-the app, and the panel (`Sound.qml`) runs it:
+In the VM, `omacvm sound [read | press NAME | balance PERCENT | allow]
+--json` asks the app, and the panel (`Sound.qml`) runs it. The owner wants
+the panel as calm as the Sound module of Control Center ("can we have less
+text and info on the screen here"), so it has no status line, no numbers
+beside the sliders and one output list:
 
-- The panel shows CoreAudio's outputs as before. What macOS lists beyond
-  them is an AirPlay speaker, in its own AIRPLAY group, or a paired
-  Bluetooth headset that is not connected (the Bridge's Bluetooth list has
-  its name), among the outputs. Both are switched by a press.
-- Because a session costs the keyboard for a second, the panel never asks on
-  a timer. It asks for the list by itself only when it opens without one, or
-  when the Mac is on AirPlay and the list's checkmarks were read for another
-  output (AirPlay gets a new CoreAudio UID each time it connects). Otherwise
-  it shows the list it has, and the button beside AIRPLAY asks again.
+- CoreAudio's outputs as before, then after a divider what macOS lists
+  beyond them: AirPlay speakers. A paired Bluetooth headset that is not
+  connected (the Bridge's Bluetooth list has its name) stands among the
+  outputs. Both are switched by a press.
+- The panel asks for the list once each time it opens, as the Mac's own
+  module does, and never on a timer. Until the answer it shows the list of
+  the last opening. The cost is the owner's choice: for about a second after
+  the panel opens, the Mac's keyboard is Control Center's.
+- The speaker's own row has the checkmark, as on the Mac. CoreAudio's one
+  AirPlay device has a row only when nobody knows which speaker plays: with
+  an app that has no list, and when AirPlay was picked on the Mac while the
+  panel is open (the list's checkmarks belong to the output's CoreAudio UID
+  they were read for, and AirPlay gets a new one each time it connects).
 - The request on its way is the row's spinner; the checkmark is macOS's.
 - BALANCE shows only for an output that has one.
+- A read or a press that did not work says so in one line for a few seconds.
 
-Without Accessibility for OmacVM the AIRPLAY group says how to allow it. It
-is the permission the VM's keyboard tap already asks for (Keyboard access).
+Without Accessibility for OmacVM, one row stands where the speakers would,
+"Allow Accessibility for OmacVM", and opens the Mac's settings for it. It is
+the permission the VM's keyboard tap already asks for (Keyboard access).
 
 `OmacVM --sound GET | POST BODY | tree` runs the same code from a terminal:
 what a VM would get, and Control Center's list as Accessibility gives it,
@@ -129,7 +140,8 @@ For both: `OmacVM --sound tree` on a Mac that shows them.
   answers "unsupported", and the panel says so; the rest of the panel works.
 - macOS 15 to 26 are untested: the menu bar's extras moved to
   `com.apple.MenuBarAgent` in 26, and the app looks in both places.
-- A read at every opening of the panel would keep the list fresh and cost
-  the keyboard for a second each time; the panel does not do that.
+- The read at every opening keeps the list fresh and costs the Mac's
+  keyboard for a second each time. A first version read it only when it had
+  no list, and with a button; the owner preferred the calmer panel.
 - Control Center names a row by the device's name alone. Of two devices
   with one name, a press reaches the first.

@@ -70,6 +70,8 @@ expect(parse("POST", #"{"press": ""}"#) == .failure(.init(400, "bad-request")), 
 expect(parse("POST", #"{"press": "a\nb"}"#) == .failure(.init(400, "bad-request")), "press: a name with a line break")
 expect(parse("POST", "{\"press\": \"\(String(repeating: "a", count: 256))\"}") == .failure(.init(400, "bad-request")), "press: a name of 256 characters")
 expect(parse("POST", #"{"balance": 0.25}"#) == .success(.balance(0.25)), "POST balance")
+expect(parse("POST", #"{"allow": true}"#) == .success(.allow), "POST allow")
+expect(parse("POST", #"{"allow": "yes"}"#) == .failure(.init(400, "bad-request")), "allow: only true")
 expect(parse("POST", #"{"balance": 1.5}"#) == .failure(.init(400, "bad-request")), "balance: outside 0...1")
 expect(parse("POST", #"{"balance": true}"#) == .failure(.init(400, "bad-request")), "balance: true is no number")
 expect(parse("POST", #"{"read": true, "press": "Living Room"}"#) == .failure(.init(400, "bad-request")), "two keys: refused")
@@ -88,6 +90,7 @@ expect(background("GET").0 == 200 && asked == 0, "GET: the state, also for a VM 
 expect(background("POST", #"{"read": true}"#) == (409, "not-front"), "a VM in the background cannot read the list")
 expect(background("POST", #"{"press": "Living Room"}"#) == (409, "not-front"), "nor press a device")
 expect(background("POST", #"{"balance": 0.5}"#) == (409, "not-front"), "nor set the balance")
+expect(background("POST", #"{"allow": true}"#) == (409, "not-front"), "nor open the Mac's settings")
 expect(background("POST", #"{"nonsense": 1}"#) == (400, "bad-request"), "a bad request is a bad request, in front or not")
 expect(parse("PUT") == .failure(.init(405, "method")), "another method: refused")
 
