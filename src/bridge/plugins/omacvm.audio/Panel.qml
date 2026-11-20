@@ -77,16 +77,17 @@ Panel {
   readonly property var meterSource: Pipewire.defaultAudioSource
   readonly property bool hasMeter: !!(meterSource && meterSource.audio)
 
-  // The output list: the Mac's outputs, then, from airplayFrom on, what only
-  // macOS's Sound list offers after them (AirPlay speakers, or the row that
-  // says how to allow them).
+  // The output list: the Mac's outputs, then what only macOS's Sound list
+  // offers (AirPlay speakers, or the row that says how to allow them). One
+  // list for the cursor: an AirPlay row's index goes on after the outputs'.
   property var displayOutputs: []
-  property int airplayFrom: 0
+  property var displayAirplay: []
   property var displayInputs: []
 
   // The panel asks the app for macOS's Sound list once per opening.
   property bool listWanted: false
-  readonly property bool showBalance: available && sound.available && !!sound.balance
+  // The balance the app read for the output that plays now.
+  readonly property bool showBalance: available && sound.available && !!sound.balance && !!output && output.uid === sound.output
   readonly property bool balanceAdjustable: showBalance && sound.balance.settable === true
 
   // Carry sub-notch touchpad deltas between wheel events.
@@ -131,7 +132,9 @@ Panel {
 
   Connections {
     target: sound
-    function onAnswered() {
+    function onAnswered(list) {
+      // Also a list that an earlier opening asked for and that came just now.
+      if (list) root.listWanted = false
       root.refreshDisplayModels()
       root.askForList()
     }
@@ -140,8 +143,8 @@ Panel {
 
   function refreshDisplayModels() {
     var lists = Model.outputLists(bridge.audio, bridge.bluetooth, available && sound.available ? sound : null)
-    displayOutputs = lists.outputs.concat(lists.airplay)
-    airplayFrom = lists.outputs.length
+    displayOutputs = lists.outputs
+    displayAirplay = lists.airplay
     displayInputs = Model.deviceRows(bridge.audio, false)
     clampCursor()
   }
@@ -157,7 +160,7 @@ Panel {
   }
 
   function sectionCount(section) {
-    if (section === "output") return displayOutputs.length
+    if (section === "output") return displayOutputs.length + displayAirplay.length
     if (section === "input") return displayInputs.length
     return 0
   }
@@ -239,7 +242,8 @@ Panel {
     if (focusSection === "header") { toggleAllMuted(); return }
     if (focusSection === "output") {
       if (selectedIndex === -1) { toggleOutputMute(); return }
-      var out = displayOutputs[selectedIndex]
+      var out = selectedIndex < displayOutputs.length ? displayOutputs[selectedIndex]
+        : displayAirplay[selectedIndex - displayOutputs.length]
       if (out) setDefaultOutput(out)
       return
     }
@@ -580,7 +584,7 @@ Panel {
             }
 
             Repeater {
-              model: root.displayOutputs.slice(0, root.airplayFrom)
+              model: root.displayOutputs
 
               SinkRow {
                 required property var modelData
@@ -593,19 +597,19 @@ Panel {
 
             // What only macOS's Sound list offers: AirPlay speakers.
             PanelSeparator {
-              visible: root.displayOutputs.length > root.airplayFrom
+              visible: root.displayAirplay.length > 0
               foreground: root.barFg
             }
 
             Repeater {
-              model: root.displayOutputs.slice(root.airplayFrom)
+              model: root.displayAirplay
 
               SinkRow {
                 required property var modelData
                 required property int index
                 width: panelColumn.width
                 device: modelData
-                rowIndex: root.airplayFrom + index
+                rowIndex: root.displayOutputs.length + index
               }
             }
 

@@ -44,18 +44,26 @@ Item {
 
   readonly property var command: ["/usr/bin/env", "/usr/local/bin/omacvm", "sound"]
 
-  signal answered()
+  // The app answered or failed to; list: with macOS's Sound list.
+  signal answered(bool list)
 
   function refresh() {
-    if (!stateProc.running && !listProc.running) stateProc.running = true
+    if (stateProc.running) return
+    stateProc.command = command.concat(["--json"])
+    stateProc.running = true
   }
 
   function read() { run(["read"], "") }
 
   function press(name) { run(["press", name], name) }
 
-  // The Mac's settings where the person lets OmacVM read the list.
-  function allow() { Quickshell.execDetached(command.concat(["allow"])) }
+  // The Mac's settings where the person lets OmacVM read the list. The
+  // answer is the state: allowed already, when they did so meanwhile.
+  function allow() {
+    if (stateProc.running) return
+    stateProc.command = command.concat(["allow", "--json"])
+    stateProc.running = true
+  }
 
   function run(words, name) {
     if (listProc.running) return
@@ -90,12 +98,11 @@ Item {
 
   Process {
     id: stateProc
-    command: sound.command.concat(["--json"])
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         if (sound.take(text) !== "") sound.available = false
-        sound.answered()
+        sound.answered(false)
       }
     }
   }
@@ -107,10 +114,13 @@ Item {
       onStreamFinished: {
         sound.failure = sound.take(text)
         sound.pressing = ""
-        // macOS took the grant away meanwhile: the state says so.
-        if (sound.failure === "accessibility") { sound.failure = ""; stateProc.running = true }
+        var failed = sound.failure !== ""
+        // macOS took the grant away meanwhile: no message, the state says so.
+        if (sound.failure === "accessibility") sound.failure = ""
         if (sound.failure !== "") failureClear.restart()
-        sound.answered()
+        sound.answered(!failed)
+        // Without a list the state alone: the output and its balance now.
+        if (failed) sound.refresh()
       }
     }
   }
