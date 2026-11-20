@@ -13,7 +13,8 @@
 // source (pipewire-alsa/-pulse installed) and is left out otherwise.
 //
 // What omacvm-bridge's audio does not have comes from OmacVM.app (Sound.qml):
-// the AirPlay speakers of macOS's own Sound list, and the output's balance.
+// the AirPlay speakers of macOS's own Sound list, the modes of headphones such
+// as AirPods, and the output's balance.
 //
 // As calm as the Sound module of the Mac's Control Center: no status line
 // and no numbers beside the sliders, and one output list, the Mac's outputs
@@ -79,10 +80,14 @@ Panel {
 
   // The output list: the Mac's outputs, then what only macOS's Sound list
   // offers (AirPlay speakers, or the row that says how to allow them). One
-  // list for the cursor: an AirPlay row's index goes on after the outputs'.
+  // list for the cursor (outputStops): each row, and under the output that
+  // plays each group of its modes, such as AirPods' Listening Mode.
   property var displayOutputs: []
   property var displayAirplay: []
   property var displayInputs: []
+  property var outputStops: []
+  // On a group of modes: the option under the cursor (h/l), pressed by Enter.
+  property int optionIndex: -1
 
   // The panel asks the app for macOS's Sound list once per opening.
   property bool listWanted: false
@@ -100,7 +105,8 @@ Panel {
   // selectedIndex semantics within a section:
   //   -1            → on the slider row (h/l adjusts, m/Enter mute, Enter
   //                   centres the balance)
-  //   0..N-1        → on the Nth device row
+  //   0..N-1        → on the Nth device row (output: the Nth of outputStops,
+  //                   a row or a group of modes)
   property string focusSection: "output"
   property int selectedIndex: -1
   property bool cursorActive: false
@@ -143,6 +149,7 @@ Panel {
 
   function refreshDisplayModels() {
     var lists = Model.outputLists(bridge.audio, bridge.bluetooth, available && sound.available ? sound : null)
+    outputStops = Model.outputStops(lists.outputs, lists.airplay)
     displayOutputs = lists.outputs
     displayAirplay = lists.airplay
     displayInputs = Model.deviceRows(bridge.audio, false)
@@ -160,7 +167,7 @@ Panel {
   }
 
   function sectionCount(section) {
-    if (section === "output") return displayOutputs.length + displayAirplay.length
+    if (section === "output") return outputStops.length
     if (section === "input") return displayInputs.length
     return 0
   }
@@ -218,6 +225,16 @@ Panel {
     }
   }
 
+  // The group of modes under the cursor, or null.
+  function cursorGroup() {
+    var stop = focusSection === "output" && selectedIndex >= 0 ? outputStops[selectedIndex] : null
+    return stop ? stop.group : null
+  }
+
+  // Arriving on a group of modes, the cursor is on the option macOS selected.
+  onSelectedIndexChanged: optionIndex = Model.optionCursor(cursorGroup(), -1, 0)
+  onFocusSectionChanged: optionIndex = Model.optionCursor(cursorGroup(), -1, 0)
+
   function setHeaderCursor() {
     cursorActive = true
     focusSection = "header"
@@ -225,6 +242,11 @@ Panel {
   }
 
   function adjustVolume(delta) {
+    var group = cursorGroup()
+    if (group) {
+      optionIndex = Model.optionCursor(group, optionIndex, delta > 0 ? 1 : -1)
+      return
+    }
     if (focusSection === "output" && selectedIndex === -1) {
       setOutputVolume(outputVolume + delta)
       return
@@ -242,9 +264,9 @@ Panel {
     if (focusSection === "header") { toggleAllMuted(); return }
     if (focusSection === "output") {
       if (selectedIndex === -1) { toggleOutputMute(); return }
-      var out = selectedIndex < displayOutputs.length ? displayOutputs[selectedIndex]
-        : displayAirplay[selectedIndex - displayOutputs.length]
-      if (out) setDefaultOutput(out)
+      var stop = outputStops[selectedIndex]
+      if (stop && stop.group) setMode(stop.row, stop.group, optionIndex)
+      else if (stop) setDefaultOutput(stop.row)
       return
     }
     if (focusSection === "balance") { sound.setBalance(0.5); return }
@@ -367,6 +389,13 @@ Panel {
     if (row.allow) { sound.allow(); return }
     if (row.picker) { sound.press(row.name); return }
     if (row.uid && !row.active) Quickshell.execDetached(["omacvm-bridge", "output", row.uid])
+  }
+
+  // macOS's own press of a mode's option, as a click in Control Center. One
+  // that macOS selected already or does not offer is not pressed.
+  function setMode(row, group, index) {
+    var option = group && group.options[index]
+    if (option && option.enabled && !option.selected) sound.mode(row.name, group.title, option.title)
   }
 
   function setDefaultInput(row) {
@@ -583,15 +612,32 @@ Panel {
               }
             }
 
+            // The output that plays has its modes under its row.
             Repeater {
               model: root.displayOutputs
 
-              SinkRow {
+              Column {
+                id: outputItem
                 required property var modelData
-                required property int index
                 width: panelColumn.width
-                device: modelData
-                rowIndex: index
+                spacing: Style.space(6)
+
+                SinkRow {
+                  width: parent.width
+                  device: outputItem.modelData
+                  rowIndex: outputItem.modelData.stop
+                }
+
+                Repeater {
+                  model: outputItem.modelData.modes || []
+
+                  ModeGroup {
+                    required property var modelData
+                    width: parent.width
+                    device: outputItem.modelData
+                    group: modelData
+                  }
+                }
               }
             }
 
@@ -606,10 +652,9 @@ Panel {
 
               SinkRow {
                 required property var modelData
-                required property int index
                 width: panelColumn.width
                 device: modelData
-                rowIndex: root.displayOutputs.length + index
+                rowIndex: modelData.stop
               }
             }
 
@@ -881,6 +926,83 @@ Panel {
         root.selectedIndex = sinkRow.rowIndex
       }
       onClicked: root.setDefaultOutput(sinkRow.device)
+    }
+  }
+
+  // A group of the modes of the output that plays, under its row: macOS's
+  // title for it, quiet, and its options in one line, as a segmented control
+  // without borders (Omarchy's Button), wrapped when they do not fit. Title
+  // and options start on the edge of the row's name. The selected option has
+  // the fill and the weight of the output that plays; an option macOS shows
+  // but does not offer ("Not Available") is dimmed and takes no press. One
+  // cursor stop: h/l walks the options, Enter or a click presses one, as a
+  // click in Control Center. The press on its way is the group's spinner, at
+  // the rows' checkmarks; the selection is macOS's word.
+  component ModeGroup: Item {
+    id: modeGroup
+    required property var device
+    required property var group
+
+    readonly property bool hasCursor: group.stop >= 0 && root.cursorActive && root.focusSection === "output" && root.selectedIndex === group.stop
+    readonly property bool busy: !!sound.switching && sound.switching.device === device.name && sound.switching.group === group.title
+    // The rows' name edge, and an option's text on it: its fill reaches out by its padding.
+    readonly property real inset: Style.space(6) + Style.space(22) + Style.space(8)
+    readonly property real optionPadding: Style.space(6)
+    onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(modeGroup)
+    implicitHeight: options.y + options.implicitHeight
+
+    Text {
+      id: groupTitle
+      x: modeGroup.inset
+      width: modeGroup.width - x - Style.space(6) - Style.space(22) - Style.space(8)
+      textFormat: Text.PlainText
+      text: modeGroup.group.title
+      color: root.barFg
+      opacity: 0.6
+      font.family: root.barFont
+      font.pixelSize: Style.font.bodySmall
+      elide: Text.ElideRight
+    }
+
+    Spinner {
+      visible: modeGroup.busy
+      anchors.right: parent.right
+      anchors.rightMargin: Style.space(6)
+      anchors.verticalCenter: groupTitle.verticalCenter
+    }
+
+    Flow {
+      id: options
+      x: modeGroup.inset - modeGroup.optionPadding
+      y: groupTitle.implicitHeight + Style.space(2)
+      width: modeGroup.width - x - Style.space(6)
+
+      Repeater {
+        model: modeGroup.group.options
+
+        Button {
+          required property var modelData
+          required property int index
+          text: modelData.title
+          fontSize: Style.font.bodySmall
+          foreground: root.barFg
+          fontFamily: root.barFont
+          horizontalPadding: modeGroup.optionPadding
+          verticalPadding: Style.space(3)
+          selected: modelData.selected && modelData.enabled
+          enabled: modelData.enabled
+          opacity: modelData.enabled ? 1.0 : 0.5
+          hasCursor: modeGroup.hasCursor && root.optionIndex === index
+          onClicked: root.setMode(modeGroup.device, modeGroup.group, index)
+          onHovered: function(h) {
+            if (!h) return
+            root.cursorActive = true
+            root.focusSection = "output"
+            root.selectedIndex = modeGroup.group.stop
+            root.optionIndex = index
+          }
+        }
+      }
     }
   }
 

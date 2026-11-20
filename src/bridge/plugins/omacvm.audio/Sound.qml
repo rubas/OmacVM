@@ -4,15 +4,15 @@ import Quickshell.Io
 
 // The Mac's sound beyond omacvm-bridge's audio payload, asked from OmacVM.app
 // with `omacvm sound` (this VM's control port): the outputs macOS's own Sound
-// list offers, AirPlay speakers among them, a press of one, and the output's
-// balance.
+// list offers, AirPlay speakers among them, the modes of headphones such as
+// AirPods, a press of a device or of a mode, and the output's balance.
 //
 // For the list and for a press the app opens Control Center on the Mac, off
 // screen. That takes about a second, and Control Center has the Mac's
 // keyboard meanwhile, so no key reaches the VM. So the list is asked only
 // when the panel asks, never on a timer, and a press waits in the app
-// until macOS has connected the speaker: the request on its way is the row's
-// "connecting".
+// until macOS has connected the speaker or selected the mode: the request on
+// its way is the row's or the group's spinner.
 Item {
   id: sound
   visible: false
@@ -25,14 +25,16 @@ Item {
   property string output: ""
   // { value: 0 left ... 1 right, settable }, or null: the output has none.
   property var balance: null
-  // [{ name, selected }] as macOS listed them last, or null: not read yet;
+  // [{ name, selected, modes? }] as macOS listed them last, or null: not read yet;
   // and the Mac's output then, which the checkmarks are for.
   property var devices: null
   property string devicesOutput: ""
 
-  // The device whose press is on its way, and whether the list is being read.
+  // The device or the group of modes ({ device, group }) whose press is on
+  // its way, and whether the list is being read.
   property string pressing: ""
-  readonly property bool reading: listProc.running && pressing === ""
+  property var switching: null
+  readonly property bool reading: listProc.running && pressing === "" && !switching
   readonly property bool busy: listProc.running
   // Why the last read or press did not work (the app's code, or "offline"),
   // for a few seconds.
@@ -53,9 +55,14 @@ Item {
     stateProc.running = true
   }
 
-  function read() { run(["read"], "") }
+  function read() { run(["read"], "", null) }
 
-  function press(name) { run(["press", name], name) }
+  function press(name) { run(["press", name], name, null) }
+
+  // An option of a device's modes, by the titles macOS gave them.
+  function mode(device, group, option) {
+    run(["mode", device, group, option], "", { device: device, group: group })
+  }
 
   // The Mac's settings where the person lets OmacVM read the list. The
   // answer is the state: allowed already, when they did so meanwhile.
@@ -65,10 +72,11 @@ Item {
     stateProc.running = true
   }
 
-  function run(words, name) {
+  function run(words, name, mode) {
     if (listProc.running) return
     failure = ""
     pressing = name
+    switching = mode
     listProc.command = command.concat(words, ["--json"])
     listProc.running = true
   }
@@ -114,6 +122,7 @@ Item {
       onStreamFinished: {
         sound.failure = sound.take(text)
         sound.pressing = ""
+        sound.switching = null
         var failed = sound.failure !== ""
         // macOS took the grant away meanwhile: no message, the state says so.
         if (sound.failure === "accessibility") sound.failure = ""
