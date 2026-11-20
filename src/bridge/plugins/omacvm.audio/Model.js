@@ -99,17 +99,11 @@ function outputLists(audio, bluetooth, sound) {
   var onAirplay = !!output && output.transport === "airplay"
   var listed = sound && Array.isArray(sound.devices) ? sound.devices : []
   var fresh = !!sound && !!output && sound.devicesOutput === output.uid
-  if (fresh) {
-    for (var o = 0; o < outputs.length; o++) {
-      if (!outputs[o].active) continue
-      for (var m = 0; m < listed.length; m++) {
-        if (listed[m].name !== outputs[o].name || !Array.isArray(listed[m].modes)) continue
-        // Copies: outputStops numbers them.
-        var offered = listed[m].modes.filter(function(g) { return g.options.some(function(op) { return op.enabled }) })
-        if (offered.length) outputs[o].modes = offered.map(function(g) { return { title: g.title, options: g.options } })
-      }
-    }
-  }
+  var current = fresh ? outputs.find(function(o) { return o.active }) : null
+  var entry = current ? listed.find(function(l) { return l.name === current.name }) : null
+  var offered = entry && Array.isArray(entry.modes) ? entry.modes.filter(function(g) { return g.options.some(function(op) { return op.enabled }) }) : []
+  // Copies: outputStops numbers them.
+  if (offered.length) current.modes = offered.map(function(g) { return { title: g.title, options: g.options } })
   var airplay = []
   var playing = false
   for (var d = 0; d < listed.length; d++) {

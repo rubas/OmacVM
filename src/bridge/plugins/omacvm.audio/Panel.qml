@@ -128,8 +128,12 @@ Panel {
     function onAudioChanged() {
       if (!outputVolumeSend.running && !outputVolumeProc.running) root.pendingOutputVolume = -1
       if (!inputVolumeSend.running && !inputVolumeProc.running) root.pendingInputVolume = -1
-      // Another output has another balance, or none.
-      if (root.opened && sound.available && root.output && root.output.uid !== sound.output) sound.refresh()
+      // Another output has another balance, or none. Headphones that play now
+      // may have modes, which only a list read for them has.
+      if (root.opened && sound.available && root.output && root.output.uid !== sound.output) {
+        sound.refresh()
+        if (root.output.transport === "bluetooth") root.listWanted = true
+      }
       root.refreshDisplayModels()
       root.askForList()
     }
@@ -391,11 +395,12 @@ Panel {
     if (row.uid && !row.active) Quickshell.execDetached(["omacvm-bridge", "output", row.uid])
   }
 
-  // macOS's own press of a mode's option, as a click in Control Center. One
-  // that macOS selected already or does not offer is not pressed.
+  // macOS's own press of a mode's option, as a click in Control Center. Also
+  // one the panel shows as selected: the headphones may have switched since
+  // the list was read, and the app presses only what macOS has not selected.
   function setMode(row, group, index) {
     var option = group && group.options[index]
-    if (option && option.enabled && !option.selected) sound.mode(row.name, group.title, option.title)
+    if (option && option.enabled) sound.mode(row.name, group.title, option.title)
   }
 
   function setDefaultInput(row) {
