@@ -71,6 +71,9 @@ function deviceRows(audio, wantOutput) {
 //   airplay  every other device macOS lists: AirPlay speakers and TVs; or,
 //            while macOS does not let the app read its list, the one row
 //            that opens the Mac's settings for it (allow: true)
+// The output that plays has the modes macOS offers for it (modes: macOS's
+// groups, such as AirPods' Listening Mode, from a list read for this output),
+// matched by name: CoreAudio and macOS's list name AirPods alike.
 // While AirPlay plays, CoreAudio has one device for it, whatever the
 // speakers. The speaker's own row has the checkmark, as on the Mac, and
 // CoreAudio's device has no row: not once a speaker's row has the checkmark,
@@ -94,6 +97,16 @@ function outputLists(audio, bluetooth, sound) {
   var onAirplay = !!output && output.transport === "airplay"
   var listed = sound && Array.isArray(sound.devices) ? sound.devices : []
   var fresh = !!sound && !!output && sound.devicesOutput === output.uid
+  if (fresh) {
+    for (var o = 0; o < outputs.length; o++) {
+      if (!outputs[o].active) continue
+      for (var m = 0; m < listed.length; m++) {
+        if (listed[m].name !== outputs[o].name || !Array.isArray(listed[m].modes) || !listed[m].modes.length) continue
+        // Copies: outputStops numbers them.
+        outputs[o].modes = listed[m].modes.map(function(g) { return { title: g.title, options: g.options } })
+      }
+    }
+  }
   var airplay = []
   var playing = false
   for (var d = 0; d < listed.length; d++) {
@@ -115,10 +128,47 @@ function outputLists(audio, bluetooth, sound) {
   return { outputs: outputs, airplay: airplay }
 }
 
+// The output list's cursor stops in the order they show: each row, under the
+// row that plays one stop per group of its modes that has an option macOS
+// offers (h/l walks its options), then the AirPlay rows. Each row and group
+// gets its stop's index, for the cursor.
+function outputStops(outputs, airplay) {
+  var stops = []
+  var rows = outputs.concat(airplay)
+  for (var i = 0; i < rows.length; i++) {
+    rows[i].stop = stops.length
+    stops.push({ row: rows[i], group: null })
+    var modes = rows[i].modes || []
+    for (var g = 0; g < modes.length; g++) {
+      modes[g].stop = -1
+      if (!modes[g].options.some(function(o) { return o.enabled })) continue
+      modes[g].stop = stops.length
+      stops.push({ row: rows[i], group: modes[g] })
+    }
+  }
+  return stops
+}
+
+// Where the cursor lands in a group: on the option macOS has selected, else
+// on the first it offers; delta walks the options it offers from `from`.
+function optionCursor(group, from, delta) {
+  var options = group ? group.options : []
+  var offered = []
+  for (var i = 0; i < options.length; i++) if (options[i].enabled) offered.push(i)
+  if (!offered.length) return -1
+  var at = offered.indexOf(from)
+  if (at < 0) {
+    for (var s = 0; s < options.length; s++) if (options[s].selected && options[s].enabled) return s
+    return offered[0]
+  }
+  return offered[Math.max(0, Math.min(offered.length - 1, at + (delta || 0)))]
+}
+
 // Why a read or a press of macOS's Sound list did not work, by the app's code.
 function soundFailureText(code) {
   if (code === "busy") return "Close Control Center and try again"
   if (code === "no-device") return "That speaker is no longer available"
+  if (code === "no-option") return "That mode isn't available right now"
   if (code === "interrupted") return "A click interrupted us, try again"
   return "We couldn't read the Mac's speakers"
 }
@@ -137,6 +187,8 @@ if (typeof module !== "undefined") {
     deviceLabel: deviceLabel,
     deviceRows: deviceRows,
     outputLists: outputLists,
+    outputStops: outputStops,
+    optionCursor: optionCursor,
     soundFailureText: soundFailureText,
     clamp01: clamp01
   }
