@@ -6,8 +6,8 @@ in more words.
 ## Unreleased
 
 - **AirPlay and balance in the Audio panel.** The Audio panel in Omarchy's bar now lists the Mac's
-  AirPlay speakers and TVs in an AIRPLAY group under the outputs, so you can click to switch or
-  play to several at once as in macOS. When the Mac's current output supports it, such as
+  AirPlay speakers and TVs in an AIRPLAY group under the outputs, so you can click to switch.
+  When the Mac's current output supports it, such as
   headphones, the panel also shows a left/right Balance slider. AirPlay needs OmacVM allowed under
   Accessibility on the Mac (System Settings → Privacy & Security → Accessibility), the same
   permission Keyboard access already uses. Because macOS offers no other way, OmacVM opens Control
