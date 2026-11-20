@@ -130,7 +130,7 @@ beside the sliders and one output list:
   outputs. Both are switched by a press.
 - The panel asks for the list once each time it opens, as the Mac's own
   module does, and once more when Bluetooth headphones become the output
-  while it is open, for their modes; never on a timer. Until the answer it shows the list of
+  while it is open, once per output, for their modes; never on a timer. Until the answer it shows the list of
   the last opening. The cost is the owner's choice: for about a second after
   the panel opens, the Mac's keyboard is Control Center's.
 - The speaker's own row has the checkmark, as on the Mac. CoreAudio's one
@@ -141,15 +141,18 @@ beside the sliders and one output list:
 - The request on its way is the row's spinner; the checkmark is macOS's.
 - The output that plays has its modes under its row, from a list read for
   it (so the panel reads the list once more when Bluetooth headphones
-  become the output while it is open): per group macOS's title, quiet, and its options in one line on the
+  become the output while it is open, once per output and opening): per group macOS's title, quiet, and its options in one line on the
   edge of the row's name, as a segmented control without borders
   (Omarchy's Button), wrapped when they do not fit. The selected option has
   the fill and the weight of the output that plays; one macOS does not offer
   is dimmed and takes no press. A group shows only while macOS offers one of
   its options: Spatial Audio with only "Not Available" is a line nobody can
   use (the owner's call, 2026-11-20); the app still passes it on. A group is
-  one stop of the cursor (h/l walk its options, Enter presses one). The
-  press on its way is the group's spinner, at the rows' checkmarks.
+  one stop of the cursor (h/l walk its options, Enter presses one). A press
+  of the option the panel shows as selected goes to the app too, as the
+  headphones may have switched since the read: it costs a session and
+  presses nothing when macOS has it selected. The press on its way is the
+  group's spinner, at the rows' checkmarks.
   With AirPods Pro the list is 505 px high (413 px without modes), so
   nothing scrolls under Omarchy's cap (528 px of list); Spatial Audio shown
   made it 551 px, and the AirPods' microphone went below the fold.

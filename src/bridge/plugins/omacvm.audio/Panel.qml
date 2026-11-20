@@ -91,6 +91,8 @@ Panel {
 
   // The panel asks the app for macOS's Sound list once per opening.
   property bool listWanted: false
+  // The output the panel asked the list for in this opening.
+  property string listOutput: ""
   // The balance the app read for the output that plays now.
   readonly property bool showBalance: available && sound.available && !!sound.balance && !!output && output.uid === sound.output
   readonly property bool balanceAdjustable: showBalance && sound.balance.settable === true
@@ -128,11 +130,13 @@ Panel {
     function onAudioChanged() {
       if (!outputVolumeSend.running && !outputVolumeProc.running) root.pendingOutputVolume = -1
       if (!inputVolumeSend.running && !inputVolumeProc.running) root.pendingInputVolume = -1
-      // Another output has another balance, or none. Headphones that play now
-      // may have modes, which only a list read for them has.
-      if (root.opened && sound.available && root.output && root.output.uid !== sound.output) {
-        sound.refresh()
-        if (root.output.transport === "bluetooth") root.listWanted = true
+      // Another output has another balance, or none.
+      if (root.opened && sound.available && root.output && root.output.uid !== sound.output) sound.refresh()
+      // Headphones that play now may have modes, which only a list read for
+      // them has: one more read per output while the panel is open.
+      if (root.opened && root.output && root.output.transport === "bluetooth" && root.output.uid !== root.listOutput) {
+        root.listOutput = root.output.uid
+        root.listWanted = true
       }
       root.refreshDisplayModels()
       root.askForList()
@@ -284,6 +288,7 @@ Panel {
   onOpenedChanged: {
     if (opened) {
       listWanted = true
+      listOutput = output ? output.uid : ""
       // A list's answer has the state too. The state alone is asked while
       // the app is not known to answer or to be allowed, which may have
       // changed since.
