@@ -73,7 +73,9 @@ function deviceRows(audio, wantOutput) {
 //            that opens the Mac's settings for it (allow: true)
 // The output that plays has the modes macOS offers for it (modes: macOS's
 // groups, such as AirPods' Listening Mode, from a list read for this output),
-// matched by name: CoreAudio and macOS's list name AirPods alike.
+// matched by name: CoreAudio and macOS's list name AirPods alike. A group
+// shows only while macOS offers one of its options: Spatial Audio with only
+// "Not Available" would be a line of text nobody can use.
 // While AirPlay plays, CoreAudio has one device for it, whatever the
 // speakers. The speaker's own row has the checkmark, as on the Mac, and
 // CoreAudio's device has no row: not once a speaker's row has the checkmark,
@@ -101,9 +103,10 @@ function outputLists(audio, bluetooth, sound) {
     for (var o = 0; o < outputs.length; o++) {
       if (!outputs[o].active) continue
       for (var m = 0; m < listed.length; m++) {
-        if (listed[m].name !== outputs[o].name || !Array.isArray(listed[m].modes) || !listed[m].modes.length) continue
+        if (listed[m].name !== outputs[o].name || !Array.isArray(listed[m].modes)) continue
         // Copies: outputStops numbers them.
-        outputs[o].modes = listed[m].modes.map(function(g) { return { title: g.title, options: g.options } })
+        var offered = listed[m].modes.filter(function(g) { return g.options.some(function(op) { return op.enabled }) })
+        if (offered.length) outputs[o].modes = offered.map(function(g) { return { title: g.title, options: g.options } })
       }
     }
   }
@@ -129,9 +132,9 @@ function outputLists(audio, bluetooth, sound) {
 }
 
 // The output list's cursor stops in the order they show: each row, under the
-// row that plays one stop per group of its modes that has an option macOS
-// offers (h/l walks its options), then the AirPlay rows. Each row and group
-// gets its stop's index, for the cursor.
+// row that plays one stop per group of its modes (h/l walks its options),
+// then the AirPlay rows. Each row and group gets its stop's index, for the
+// cursor.
 function outputStops(outputs, airplay) {
   var stops = []
   var rows = outputs.concat(airplay)
@@ -140,8 +143,6 @@ function outputStops(outputs, airplay) {
     stops.push({ row: rows[i], group: null })
     var modes = rows[i].modes || []
     for (var g = 0; g < modes.length; g++) {
-      modes[g].stop = -1
-      if (!modes[g].options.some(function(o) { return o.enabled })) continue
       modes[g].stop = stops.length
       stops.push({ row: rows[i], group: modes[g] })
     }

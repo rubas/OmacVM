@@ -16,10 +16,11 @@ in more words.
   calmer: no status line and no numbers beside the sliders. It needs the app update and Update VM.
 - **Headphone modes in the Audio panel.** When AirPods or other supported headphones are the Mac's
   output, the Audio panel shows their macOS modes under their row in the Mac's own words and
-  language, with unavailable options dimmed. On AirPods Pro, you get Listening Mode (Transparency,
-  Adaptive, Noise Cancellation), Spatial Audio, and Conversation Awareness. Click to switch, or pick
-  with h and l and press Enter. This uses the same Control Center access as AirPlay, so the same
-  Accessibility permission and one-second keyboard pause apply. It needs the app update and Update VM.
+  language. On AirPods Pro, you get Listening Mode (Transparency, Adaptive, Noise Cancellation),
+  Spatial Audio, and Conversation Awareness. The panel hides a group when macOS offers none of its
+  options, and dims any unavailable option inside a shown group. Click to switch, or pick with h and
+  l and press Enter. This uses the same Control Center access as AirPlay, so the same Accessibility
+  permission and one-second keyboard pause apply. It needs the app update and Update VM.
 - **Dismiss all notifications also closes the Mac's.** In full screen macOS shows its banners and
   alerts (such as *App Background Activity*) over the VM, where nothing in the VM reaches them.
   Omarchy's own Super+Shift+, now also closes the ones on the Mac's screen, through the Bridge

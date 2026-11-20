@@ -143,17 +143,20 @@ beside the sliders and one output list:
   edge of the row's name, as a segmented control without borders
   (Omarchy's Button), wrapped when they do not fit. The selected option has
   the fill and the weight of the output that plays; one macOS does not offer
-  is dimmed and takes no press. A group is one stop of the cursor (h/l walk
-  its options, Enter presses one), a group without an offered option none.
-  The press on its way is the group's spinner, at the rows' checkmarks.
-  Tried as renders against Control Center's own vertical list (all options
-  as rows: about 230 px, against about 140 for this one, and the input's
-  slider below the fold),
-  bordered cells of equal width (Omarchy's power profiles: "Noise
+  is dimmed and takes no press. A group shows only while macOS offers one of
+  its options: Spatial Audio with only "Not Available" is a line nobody can
+  use (the owner's call, 2026-11-20); the app still passes it on. A group is
+  one stop of the cursor (h/l walk its options, Enter presses one). The
+  press on its way is the group's spinner, at the rows' checkmarks.
+  With AirPods Pro the list is 505 px high (413 px without modes), so
+  nothing scrolls under Omarchy's cap (528 px of list); Spatial Audio shown
+  made it 551 px, and the AirPods' microphone went below the fold.
+  Tried as renders against Control Center's own vertical list (every option
+  a row: about 230 px for the three groups, and the input's slider below
+  the fold), bordered cells of equal width (Omarchy's power profiles: "Noise
   Cancellation" shrinks and is cut) and one line per group with its value
   (compact, but a switch takes two clicks or steps through the modes
-  between). With AirPods the panel still reaches Omarchy's cap of 560 px,
-  and its last input row needs a scroll.
+  between).
 - BALANCE shows only for an output that has one.
 - A read or a press that did not work says so in one line for a few seconds.
 
