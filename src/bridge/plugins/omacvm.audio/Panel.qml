@@ -12,6 +12,9 @@
 // carries exactly what apps in the VM hear. It shows once PipeWire has that
 // source (pipewire-alsa/-pulse installed) and is left out otherwise.
 //
+// What omacvm-bridge's audio does not have comes from OmacVM.app (Sound.qml):
+// the AirPlay speakers of macOS's own Sound list, and the output's balance.
+//
 // The volume popup is not shown from here: omacvm-bridge-osd already shows
 // Omarchy's OSD for every volume change the helper reports.
 import QtQuick
@@ -31,12 +34,14 @@ Panel {
   ipcTarget: "omarchy.audio"
 
   Bridge { id: bridge }
+  Sound { id: sound }
 
   // `bar` is null while there is no bar: Omarchy's bar sets it from outside,
   // and when the shell reloads a plugin in place (a widget or the bar copy
   // written, Update VM) the old bar goes before its widgets. Then Omarchy's
   // own bar colours and font, so no binding reads a property of null.
   readonly property color barFg: bar ? bar.foreground : Commons.Color.bar.text
+  readonly property color barUrgent: bar ? bar.urgent : Commons.Color.bar.active
   readonly property string barFont: bar ? bar.fontFamily : Style.font.family
 
   readonly property bool available: bridge.available && !!bridge.audio
@@ -69,16 +74,31 @@ Panel {
   readonly property bool hasMeter: !!(meterSource && meterSource.audio)
 
   property var displayOutputs: []
+  property var displayAirplay: []
   property var displayInputs: []
+
+  // The AirPlay speakers show once the app answers and macOS lets it read
+  // its Sound list; without that the section says how to allow it.
+  readonly property bool showAirplay: available && sound.available
+  readonly property bool airplayUsable: showAirplay && sound.accessibility
+  // Nobody knows which speakers play: AirPlay was picked on the Mac itself.
+  property bool airplayKnown: true
+  // The list is asked by itself at most once per opening.
+  property bool listAsked: false
+  readonly property bool showBalance: available && sound.available && !!sound.balance
+  readonly property bool balanceAdjustable: showBalance && sound.balance.settable === true
 
   // Carry sub-notch touchpad deltas between wheel events.
   property real wheelAccumulator: 0
 
   // Single cursor model shared by keyboard and mouse. Sections:
   //   "output"  — output slider + output device list
+  //   "airplay" — the button that looks for speakers + AirPlay speaker list
+  //   "balance" — balance slider
   //   "input"   — input slider + input device list
   // selectedIndex semantics within a section:
-  //   -1            → on the slider row (h/l adjusts volume, m/Enter mute)
+  //   -1            → on the section's control: a slider row (h/l adjusts,
+  //                   m/Enter mute, Enter centres the balance) or the button
   //   0..N-1        → on the Nth device row
   property string focusSection: "output"
   property int selectedIndex: -1
@@ -101,38 +121,67 @@ Panel {
     function onAudioChanged() {
       if (!outputVolumeSend.running && !outputVolumeProc.running) root.pendingOutputVolume = -1
       if (!inputVolumeSend.running && !inputVolumeProc.running) root.pendingInputVolume = -1
+      // Another output has another balance, or none.
+      if (root.opened && sound.available && root.output && root.output.uid !== sound.output) sound.refresh()
       root.refreshDisplayModels()
+    }
+    function onBluetoothChanged() { root.refreshDisplayModels() }
+  }
+
+  Connections {
+    target: sound
+    function onAnswered() {
+      root.refreshDisplayModels()
+      root.askForList()
     }
   }
 
   function refreshDisplayModels() {
-    displayOutputs = Model.deviceRows(bridge.audio, true)
+    var lists = Model.outputLists(bridge.audio, bridge.bluetooth, sound.available ? sound : null)
+    displayOutputs = lists.outputs
+    displayAirplay = lists.airplay
+    airplayKnown = lists.airplayKnown
     displayInputs = Model.deviceRows(bridge.audio, false)
     clampCursor()
   }
 
+  // The app opens Control Center on the Mac for the list, which takes the
+  // Mac's keyboard for about a second. So the panel asks by itself only when
+  // it has no list yet or cannot know which speakers play, and otherwise
+  // shows the list it has; the button beside AIRPLAY asks again.
+  function askForList() {
+    if (!opened || listAsked || !airplayUsable || sound.busy) return
+    if (sound.devices !== null && airplayKnown) return
+    listAsked = true
+    sound.read()
+  }
+
   function sectionCount(section) {
     if (section === "output") return displayOutputs.length
+    if (section === "airplay") return displayAirplay.length
     if (section === "input") return displayInputs.length
     return 0
   }
 
   function sectionVisible(section) {
     if (section === "output") return true
+    if (section === "airplay") return airplayUsable
+    if (section === "balance") return showBalance
     if (section === "input") return displayInputs.length > 0 || hasInput
     return false
   }
 
+  // A control above the section's rows, at index -1.
   function sectionHasSlider(section) {
-    if (section === "output") return true
+    if (section === "output" || section === "airplay" || section === "balance") return true
     if (section === "input") return hasInput
     return false
   }
 
   readonly property var visibleSections: {
     var list = []
-    if (sectionVisible("output")) list.push("output")
-    if (sectionVisible("input")) list.push("input")
+    var all = ["output", "airplay", "balance", "input"]
+    for (var i = 0; i < all.length; i++) if (sectionVisible(all[i])) list.push(all[i])
     return list
   }
 
@@ -180,6 +229,10 @@ Panel {
       setOutputVolume(outputVolume + delta)
       return
     }
+    if (focusSection === "balance") {
+      sound.setBalance(sound.balanceValue + delta)
+      return
+    }
     if (focusSection === "input" && selectedIndex === -1) {
       setInputVolume(inputVolume + delta)
     }
@@ -193,6 +246,13 @@ Panel {
       if (out) setDefaultOutput(out)
       return
     }
+    if (focusSection === "airplay") {
+      if (selectedIndex === -1) { sound.read(); return }
+      var speaker = displayAirplay[selectedIndex]
+      if (speaker) setDefaultOutput(speaker)
+      return
+    }
+    if (focusSection === "balance") { sound.setBalance(0.5); return }
     if (focusSection === "input") {
       if (selectedIndex === -1) { toggleInputMute(); return }
       var src = displayInputs[selectedIndex]
@@ -202,6 +262,8 @@ Panel {
 
   onOpenedChanged: {
     if (opened) {
+      listAsked = false
+      sound.refresh()
       refreshDisplayModels()
       focusSection = "output"
       selectedIndex = -1
@@ -301,8 +363,14 @@ Panel {
     if (inputMutable) Quickshell.execDetached(["omacvm-bridge", "mic-mute", state])
   }
 
+  // An output CoreAudio knows is switched by its uid. One that only macOS's
+  // Sound list offers is pressed there, as a click on the Mac would: an
+  // AirPlay speaker that plays stops, another one starts, also next to the
+  // ones that play.
   function setDefaultOutput(row) {
-    if (row && row.uid && !row.active) Quickshell.execDetached(["omacvm-bridge", "output", row.uid])
+    if (!row) return
+    if (row.picker) { sound.press(row.name); return }
+    if (row.uid && !row.active) Quickshell.execDetached(["omacvm-bridge", "output", row.uid])
   }
 
   function setDefaultInput(row) {
@@ -577,6 +645,155 @@ Panel {
             }
           }
 
+          // ---- AirPlay speakers, from macOS's own Sound list ----
+          Column {
+            visible: root.showAirplay
+            width: parent.width
+            spacing: Style.space(6)
+
+            Item {
+              width: parent.width
+              implicitHeight: Math.max(airplayHeader.implicitHeight, airplayRefresh.implicitHeight)
+
+              PanelSectionHeader {
+                id: airplayHeader
+                text: "AIRPLAY"
+                foreground: root.barFg
+                fontFamily: root.barFont
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              PanelActionButton {
+                id: airplayRefresh
+                visible: root.airplayUsable
+                opacity: sound.reading ? 0 : 1
+                enabled: !sound.busy
+                iconText: "󰑐"
+                tooltipText: "Check for AirPlay devices"
+                foreground: root.barFg
+                hoverColor: root.barFg
+                fontFamily: root.barFont
+                hasCursor: root.cursorActive && root.focusSection === "airplay" && root.selectedIndex === -1
+                onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(airplayRefresh)
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                onHovered: function(isHovered) {
+                  if (!isHovered) return
+                  root.cursorActive = true
+                  root.focusSection = "airplay"
+                  root.selectedIndex = -1
+                }
+                onClicked: sound.read()
+              }
+
+              Spinner {
+                visible: sound.reading
+                anchors.centerIn: airplayRefresh
+              }
+            }
+
+            Text {
+              visible: !sound.accessibility || sound.failure !== "" || (sound.devices !== null && root.displayAirplay.length === 0)
+              width: parent.width
+              textFormat: Text.PlainText
+              wrapMode: Text.WordWrap
+              text: !sound.accessibility
+                ? "To use AirPlay from here, allow Accessibility for OmacVM on the Mac: System Settings → Privacy & Security → Accessibility."
+                : (sound.failure !== "" ? Model.soundFailureText(sound.failure) : "No AirPlay devices right now")
+              color: sound.accessibility && sound.failure !== "" ? root.barUrgent : Qt.darker(root.barFg, 1.4)
+              font.family: root.barFont
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Repeater {
+              model: root.airplayUsable ? root.displayAirplay : []
+
+              SinkRow {
+                required property var modelData
+                required property int index
+                width: panelColumn.width
+                device: modelData
+                rowIndex: index
+                sectionName: "airplay"
+              }
+            }
+          }
+
+          // ---- Balance of the output, where it has one ----
+          Column {
+            visible: root.showBalance
+            width: parent.width
+            spacing: Style.space(6)
+
+            Item {
+              width: parent.width
+              implicitHeight: Math.max(balanceHeader.implicitHeight, balanceLabel.implicitHeight)
+
+              PanelSectionHeader {
+                id: balanceHeader
+                text: "BALANCE"
+                foreground: root.barFg
+                fontFamily: root.barFont
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Text {
+                id: balanceLabel
+                textFormat: Text.PlainText
+                text: root.balanceAdjustable
+                  ? Model.balanceLabel(balanceSlider.dragging ? balanceSlider.liveValue : sound.balanceValue)
+                  : "FIXED"
+                color: Qt.darker(root.barFg, 1.4)
+                font.family: root.barFont
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(6)
+                anchors.verticalCenter: parent.verticalCenter
+              }
+            }
+
+            CursorSurface {
+              id: balanceSliderRow
+              width: parent.width
+              height: balanceSlider.implicitHeight + Style.spacing.controlGap
+              hasCursor: root.cursorActive && root.focusSection === "balance"
+              onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(balanceSliderRow)
+              foreground: root.barFg
+              outline: true
+
+              // No fill: a balance is a place between left and right, not a level.
+              PanelSlider {
+                id: balanceSlider
+                bar: root.bar
+                anchors.fill: parent
+                anchors.leftMargin: Style.space(6)
+                anchors.rightMargin: Style.space(6)
+                minimum: 0
+                maximum: 1
+                step: 0.05
+                tickCount: 3
+                fillColor: "transparent"
+                value: sound.balanceValue
+                opacity: root.balanceAdjustable ? 1.0 : 0.5
+                enabled: root.balanceAdjustable
+
+                onMoved: function(v) { sound.setBalance(v) }
+                onRightClicked: sound.setBalance(0.5)
+              }
+
+              HoverHandler {
+                onHoveredChanged: if (hovered) {
+                  root.cursorActive = true
+                  root.focusSection = "balance"
+                  root.selectedIndex = -1
+                }
+              }
+            }
+          }
+
           // ---- Input ----
           PanelSeparator {
             visible: root.available && (root.displayInputs.length > 0 || root.hasInput)
@@ -694,14 +911,63 @@ Panel {
 
   // ---- Reusable inline components ----
 
-  // Output device row — cursor target inside the "output" section.
+  // What a device row ends with: macOS's checkmark on the one that plays, and
+  // a spinner while macOS connects it.
+  component RowMark: Item {
+    property bool active: false
+    property bool busy: false
+    width: Style.space(22)
+    height: mark.implicitHeight
+    anchors.verticalCenter: parent.verticalCenter
+
+    Text {
+      id: mark
+      visible: parent.active && !parent.busy
+      textFormat: Text.PlainText
+      text: "󰄬"
+      color: root.barFg
+      font.family: root.barFont
+      font.pixelSize: Style.font.title
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+    }
+
+    Spinner {
+      visible: parent.busy
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+    }
+  }
+
+  component Spinner: Text {
+    textFormat: Text.PlainText
+    text: ""
+    color: root.barFg
+    font.family: root.barFont
+    font.pixelSize: Style.font.title
+    transformOrigin: Item.Center
+
+    RotationAnimation on rotation {
+      from: 0
+      to: 360
+      duration: Style.duration(900)
+      loops: Animation.Infinite
+      running: parent.visible && Style.duration(900) > 0
+    }
+  }
+
+  // Output device row — cursor target inside the "output" section, and
+  // inside "airplay" for the speakers of macOS's Sound list.
   component SinkRow: CursorSurface {
     id: sinkRow
     required property var device
     required property int rowIndex
+    property string sectionName: "output"
 
     readonly property bool isActive: !!(device && device.active)
-    hasCursor: root.cursorActive && root.focusSection === "output" && root.selectedIndex === rowIndex
+    // The press of this device is on its way: macOS connects it.
+    readonly property bool isBusy: !!(device && device.picker && sound.pressing === device.name)
+    hasCursor: root.cursorActive && root.focusSection === sectionName && root.selectedIndex === rowIndex
     onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(sinkRow)
     current: isActive
     foreground: root.barFg
@@ -737,8 +1003,13 @@ Panel {
         font.pixelSize: Style.font.body
         font.bold: sinkRow.isActive
         elide: Text.ElideRight
-        width: parent.width - Style.space(22) - Style.space(8)
+        width: parent.width - 2 * (Style.space(22) + Style.space(8))
         anchors.verticalCenter: parent.verticalCenter
+      }
+
+      RowMark {
+        active: sinkRow.isActive
+        busy: sinkRow.isBusy
       }
     }
 
@@ -748,7 +1019,7 @@ Panel {
       cursorShape: Qt.PointingHandCursor
       onContainsMouseChanged: if (containsMouse) {
         root.cursorActive = true
-        root.focusSection = "output"
+        root.focusSection = sinkRow.sectionName
         root.selectedIndex = sinkRow.rowIndex
       }
       onClicked: root.setDefaultOutput(sinkRow.device)
@@ -798,9 +1069,11 @@ Panel {
         font.pixelSize: Style.font.body
         font.bold: sourceRow.isActive
         elide: Text.ElideRight
-        width: parent.width - Style.space(22) - Style.space(8)
+        width: parent.width - 2 * (Style.space(22) + Style.space(8))
         anchors.verticalCenter: parent.verticalCenter
       }
+
+      RowMark { active: sourceRow.isActive }
     }
 
     MouseArea {
