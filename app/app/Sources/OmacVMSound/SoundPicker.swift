@@ -27,6 +27,9 @@ public final class SoundPicker {
         case unsupported(String)
         /// macOS does not offer a device of this name now.
         case noDevice(String)
+        /// The device has no such option of its modes now, or macOS shows it
+        /// but does not offer it ("Not Available").
+        case noOption
         /// Control Center closed while the app worked in it (a click elsewhere).
         case interrupted
     }
@@ -52,14 +55,17 @@ public final class SoundPicker {
     /// How long macOS may take to connect a speaker before the app closes
     /// Control Center and answers with the list as it is.
     static let connectLimit = 15.0
+    /// How long macOS may take to select a mode (AirPods: 0.5 s).
+    static let modeLimit = 5.0
 
     public init() {}
 
     // MARK: Sessions
 
-    /// The list as Control Center shows it now.
+    /// The list as Control Center shows it now, with the modes of the device
+    /// that plays.
     public func read() throws -> (elements: [SoundElement], took: Double) {
-        try session { details in try details.settled() }
+        try session { details in try details.settledWithModes() }
     }
 
     /// Presses the device's row as a click in Control Center does, and waits
@@ -70,12 +76,32 @@ public final class SoundPicker {
         try session { details in
             let before = SoundList.rows(try details.settled())
             guard before.contains(where: { $0.name == name }) else { throw Failure.noDevice(name) }
-            try details.press(SoundList.rowPrefix + name)
+            try details.press { $0.firstIndex { $0.identifier == SoundList.rowPrefix + name && $0.role == SoundList.rowRole } }
             var moved = false
             return try details.wait(limit: Self.connectLimit) { now in
                 let rows = SoundList.rows(now)
                 if SoundList.playing(rows) != SoundList.playing(before) { moved = true }
                 return SoundList.pressDone(name, before: before, now: rows, moved: moved)
+            }
+        }
+    }
+
+    /// Presses an option of a device's modes, found by its device, its
+    /// group's title and its own title as the list has them now, and waits
+    /// until macOS has selected it. Control Center rebuilds the list on the
+    /// press, so every element is found again after it. An option that is
+    /// selected already is not pressed: a press can also take a checkmark
+    /// away, as on a device's row.
+    public func mode(device: String, group: String, option: String) throws -> (elements: [SoundElement], took: Double) {
+        try session { details in
+            let before = try details.settledWithModes()
+            let rows = SoundList.rows(before)
+            guard rows.contains(where: { $0.name == device }) else { throw Failure.noDevice(device) }
+            guard let now = SoundList.option(rows, device: device, group: group, option: option), now.enabled else { throw Failure.noOption }
+            if now.selected { return before }
+            try details.press { SoundList.optionIndex($0, device: device, group: group, option: option) }
+            return try details.wait(limit: Self.modeLimit) {
+                SoundList.option(SoundList.rows($0), device: device, group: group, option: option)?.selected == true
             }
         }
     }
@@ -99,6 +125,7 @@ public final class SoundPicker {
         defer { Self.close(app, extra) }
         guard let window = AX.wait(2, { AX.windows(app)?.first }) else { throw Failure.unsupported("Control Center did not open") }
         AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, away)
+        let details = Details(app: app, window: window, away: away)
         guard let toggle = AX.wait(2, { AX.find(window, identifier: Self.soundToggle) }) else {
             throw AX.windows(app)?.isEmpty == true ? Failure.interrupted : Failure.unsupported("no Sound module in Control Center")
         }
@@ -109,7 +136,7 @@ public final class SoundPicker {
         guard custom.count == 1, AXUIElementPerformAction(toggle, custom[0] as CFString) == .success else {
             throw Failure.unsupported("the Sound module has no list")
         }
-        let elements = try work(Details(app: app, window: window))
+        let elements = try work(details)
         Self.close(app, extra)
         return (elements, ProcessInfo.processInfo.systemUptime - start)
     }
@@ -160,17 +187,26 @@ public final class SoundPicker {
 
     /// The open list.
     final class Details {
-        let app: AXUIElement, window: AXUIElement
-        init(app: AXUIElement, window: AXUIElement) { self.app = app; self.window = window }
+        let app: AXUIElement
+        private var window: AXUIElement
+        private let away: AXValue
+        init(app: AXUIElement, window: AXUIElement, away: AXValue) { self.app = app; self.window = window; self.away = away }
 
         private func scan() throws -> [(SoundElement, AXUIElement)] {
             // A click anywhere closes Control Center: its elements then answer nothing.
-            guard AX.windows(app)?.isEmpty == false else { throw Failure.interrupted }
+            guard let now = AX.windows(app)?.first else { throw Failure.interrupted }
+            // The window is asked for each time: 2 s after a press of a mode
+            // the one that opened answered nothing once (macOS 27.2.1).
+            // Another one goes off screen too.
+            if !CFEqual(now, window) {
+                window = now
+                AXUIElementSetAttributeValue(now, kAXPositionAttribute as CFString, away)
+            }
             var out: [(SoundElement, AXUIElement)] = []
-            AX.walk(window, 0) { e, depth in
+            AX.walk(now, 0) { e, depth in
                 out.append((SoundElement(depth: depth, role: AX.string(e, kAXRoleAttribute), subrole: AX.string(e, kAXSubroleAttribute),
                                          identifier: AX.string(e, kAXIdentifierAttribute), description: AX.string(e, kAXDescriptionAttribute),
-                                         value: AX.string(e, kAXValueAttribute)), e))
+                                         value: AX.string(e, kAXValueAttribute), enabled: AX.string(e, kAXEnabledAttribute) != "0"), e))
             }
             return out
         }
@@ -184,27 +220,44 @@ public final class SoundPicker {
             var last: [SoundElement] = []
             while ProcessInfo.processInfo.systemUptime < end {
                 let now = try read()
-                if now.contains(where: { $0.identifier == SoundList.title }), !SoundList.rows(now).isEmpty, now == last { return now }
+                if SoundList.isList(now), now == last { return now }
                 last = now
                 usleep(60_000)
             }
             throw Failure.unsupported("the Sound module shows no list of devices that stands")
         }
 
+        /// The list as `done` wants it, or as it stands after `limit`. A read
+        /// while Control Center rebuilds the list is no list and says nothing.
         func wait(limit: Double, _ done: ([SoundElement]) -> Bool) throws -> [SoundElement] {
             let end = ProcessInfo.processInfo.systemUptime + limit
             var now = try read()
-            while !done(now), ProcessInfo.processInfo.systemUptime < end {
+            while !(SoundList.isList(now) && done(now)), ProcessInfo.processInfo.systemUptime < end {
                 usleep(60_000)
                 now = try read()
             }
-            return now
+            return SoundList.isList(now) ? now : try settled()
         }
 
-        /// The device's own row: the first checkbox with its identifier.
-        func press(_ identifier: String) throws {
-            guard let e = try scan().first(where: { $0.0.identifier == identifier && $0.0.role == SoundList.rowRole })?.1,
-                  AXUIElementPerformAction(e, kAXPressAction as CFString) == .success else { throw Failure.interrupted }
+        /// The list once it stands, with the modes of the device that plays:
+        /// its disclosure triangle is opened first when it is closed, as a
+        /// click would, and Control Center keeps it open from then on.
+        func settledWithModes() throws -> [SoundElement] {
+            let list = try settled()
+            guard SoundList.closedDisclosure(list) != nil else { return list }
+            try press(SoundList.closedDisclosure)
+            _ = try wait(limit: 2) { SoundList.closedDisclosure($0) == nil }
+            return try settled()
+        }
+
+        /// Presses the element that `find` points to in the list as it is
+        /// now: an element of an earlier read may be gone, as the list is
+        /// rebuilt after a press.
+        func press(_ find: ([SoundElement]) -> Int?) throws {
+            let now = try scan()
+            guard let i = find(now.map(\.0)), AXUIElementPerformAction(now[i].1, kAXPressAction as CFString) == .success else {
+                throw Failure.interrupted
+            }
         }
     }
 }

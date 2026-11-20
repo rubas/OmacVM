@@ -1,9 +1,9 @@
-# 0075: AirPlay speakers and balance in the VM's audio panel
+# 0075: AirPlay speakers, AirPods' modes and balance in the VM's audio panel
 
 Status: accepted, built, OmacVM.app only. Needs the app update and Update VM.
-Seen working on macOS 27.2.1 only; not built: a volume per speaker while
-several play, and the modes of AirPods (noise control, Spatial Audio), see
-"Not built".
+Seen working on macOS 27.2.1 only; the modes of AirPods are built on the
+lists Accessibility gave and not yet tried in a VM; not built: a volume per
+speaker while several play, see "Not built".
 
 ## Context
 
@@ -31,6 +31,22 @@ What macOS gives a program, tried on macOS 27.2.1 (2026-11-20):
   becomes a device with the transport AirPlay about 70 ms later. With an
   AirPlay speaker playing, a press of one of the Mac's own outputs switches
   to it alone.
+- With AirPods Pro as the output (captured 2026-11-20), everything of the
+  AirPods in the list has their row's identifier: an `AXDisclosureTriangle`
+  before the row (value 1 open, 0 closed; a press toggles it, and Control
+  Center keeps it for its next opening), the row (its description also has
+  the battery: the name comes from the identifier), then per group of modes
+  an `AXHeading` (its title) and its options as `AXCheckBox` (title, value 1
+  selected, `AXEnabled` 0 for one macOS shows but does not offer). Listening
+  Mode has Transparency, Adaptive and Noise Cancellation, Spatial Audio only
+  "Not Available" (not enabled; its value was 0 in one capture and 1 in
+  the next), Conversation Awareness Off and On. With Adaptive selected,
+  three `AXImage` of its level stand between the options. Titles follow the
+  Mac's language, and nothing else tells the modes apart.
+- A press of an option selects it within 0.5 s and rebuilds the list: every
+  element read before is invalid (`kAXErrorInvalidUIElement`). Once, 2 s
+  after a press of Adaptive, the window that had opened answered nothing at
+  all; in the next round it did.
 - The balance is public: CoreAudio's
   `kAudioHardwareServiceDeviceProperty_VirtualMainBalance` on the output
   device. A device has it only with a volume per channel. A Studio Display's
@@ -70,6 +86,18 @@ ADR 0031), so it works with every Bridge:
 - `POST {"press": NAME}`: presses that row and answers the list once macOS
   is done: the row's checkmark changed, or the list moved and is as before
   again (the speaker did not connect), or after 15 s.
+- A device with modes has `"modes": [{"title", "options": [{"title",
+  "selected", "enabled"}]}]` in the list, macOS's groups in its own words,
+  so whatever another headphone or a later macOS offers passes through. A
+  read opens the closed disclosure of the device that plays first, as a
+  click would; Control Center keeps it open from then on.
+- `POST {"mode": {"device", "group", "option"}}`: finds the option by these
+  three texts in the list as it is at that moment (after the device's row,
+  under that heading: "Off" and "On" repeat), presses it, and answers the
+  list once macOS has selected it, or after 5 s. One that macOS does not
+  offer is refused (`no-option`), one that is selected already is not
+  pressed. Each press and each wait reads the list again, and each read
+  asks Control Center for its window again and moves a new one off screen.
 - `POST {"balance": 0...1}`: CoreAudio.
 - `POST {"allow": true}`: asks macOS for Accessibility, which lists OmacVM
   there, and opens that list in System Settings. Only the person turns it on.
@@ -81,7 +109,7 @@ opens the Sound list, and closes Control Center again on every way out
 titles and action names follow the Mac's language.
 
 The guest is untrusted: one exact path, a body of exactly one known key, a
-device only by a name the list has at that moment, and every POST only while
+device or an option only by the texts the list has at that moment, and every POST only while
 this VM's window is the app in front, because a session takes the Mac's
 keyboard for a second. The app asks who is in front at the moment it would
 open Control Center, and refuses a request that comes while a session runs
@@ -90,8 +118,8 @@ the VM. The route is the feature bridge's: with it off the app answers as one
 without the route. There is no rate limit: a VM in front that asks in a loop
 keeps the Mac's keyboard away until the person clicks out of it.
 
-In the VM, `omacvm sound [read | press NAME | balance PERCENT | allow]
---json` asks the app, and the panel (`Sound.qml`) runs it. The owner wants
+In the VM, `omacvm sound [read | press NAME | mode NAME GROUP OPTION |
+balance PERCENT | allow] --json` asks the app, and the panel (`Sound.qml`) runs it. The owner wants
 the panel as calm as the Sound module of Control Center ("can we have less
 text and info on the screen here"), so it has no status line, no numbers
 beside the sliders and one output list:
@@ -101,7 +129,8 @@ beside the sliders and one output list:
   connected (the Bridge's Bluetooth list has its name) stands among the
   outputs. Both are switched by a press.
 - The panel asks for the list once each time it opens, as the Mac's own
-  module does, and never on a timer. Until the answer it shows the list of
+  module does, and once more when Bluetooth headphones become the output
+  while it is open, once per output, for their modes; never on a timer. Until the answer it shows the list of
   the last opening. The cost is the owner's choice: for about a second after
   the panel opens, the Mac's keyboard is Control Center's.
 - The speaker's own row has the checkmark, as on the Mac. CoreAudio's one
@@ -110,6 +139,29 @@ beside the sliders and one output list:
   panel is open (the list's checkmarks belong to the output's CoreAudio UID
   they were read for, and AirPlay gets a new one each time it connects).
 - The request on its way is the row's spinner; the checkmark is macOS's.
+- The output that plays has its modes under its row, from a list read for
+  it (so the panel reads the list once more when Bluetooth headphones
+  become the output while it is open, once per output and opening): per group macOS's title, quiet, and its options in one line on the
+  edge of the row's name, as a segmented control without borders
+  (Omarchy's Button), wrapped when they do not fit. The selected option has
+  the fill and the weight of the output that plays; one macOS does not offer
+  is dimmed and takes no press. A group shows only while macOS offers one of
+  its options: Spatial Audio with only "Not Available" is a line nobody can
+  use (the owner's call, 2026-11-20); the app still passes it on. A group is
+  one stop of the cursor (h/l walk its options, Enter presses one). A press
+  of the option the panel shows as selected goes to the app too, as the
+  headphones may have switched since the read: it costs a session and
+  presses nothing when macOS has it selected. The press on its way is the
+  group's spinner, at the rows' checkmarks.
+  With AirPods Pro the list is 505 px high (413 px without modes), so
+  nothing scrolls under Omarchy's cap (528 px of list); Spatial Audio shown
+  made it 551 px, and the AirPods' microphone went below the fold.
+  Tried as renders against Control Center's own vertical list (every option
+  a row: about 230 px for the three groups, and the input's slider below
+  the fold), bordered cells of equal width (Omarchy's power profiles: "Noise
+  Cancellation" shrinks and is cut) and one line per group with its value
+  (compact, but a switch takes two clicks or steps through the modes
+  between).
 - BALANCE shows only for an output that has one.
 - A read or a press that did not work says so in one line for a few seconds.
 
@@ -124,15 +176,15 @@ to send along when a macOS shows a list the app cannot read.
 ## Not built
 
 - **A volume per speaker** while several AirPlay speakers play. Only one
-  AirPlay speaker was there, so the sliders' place in the list is unknown.
-  Several speakers at once need nothing more than a press each, but that too
-  is untested.
-- **AirPods' modes** (noise control, Spatial Audio). No AirPods were paired.
-  Control Center's binary names `active-noise-cancellation`,
-  `audio-transparency`, `spatial-audio-modes`, `on-with-headtracking` and
-  `on-without-headtracking`, but not where they sit in the list.
-
-For both: `OmacVM --sound tree` on a Mac that shows them.
+  AirPlay speaker was there, so nobody has seen those sliders. A guess, not
+  seen: as all of AirPods' modes carry their row's identifier, such a
+  slider is probably an `AXSlider` with the speaker's identifier after its
+  row. Several speakers at once need nothing more than a press each, but
+  that too is untested. The capture that is missing: `OmacVM --sound tree`
+  while two AirPlay speakers play.
+- **Adaptive's level** (the three images between the options while
+  Adaptive is selected): the list gives no control for it that this code
+  knows.
 
 ## Consequences
 
@@ -145,3 +197,7 @@ For both: `OmacVM --sound tree` on a Mac that shows them.
   no list, and with a button; the owner preferred the calmer panel.
 - Control Center names a row by the device's name alone. Of two devices
   with one name, a press reaches the first.
+- The modes are found by their titles, which follow the Mac's language:
+  the panel shows them as macOS words them, and the guest asks for one by
+  those words. A read opens the AirPods' modes in Control Center, which
+  the person sees there next time.
