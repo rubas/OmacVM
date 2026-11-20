@@ -77,6 +77,43 @@ def test_presses_a_device(vm):
     assert [d["name"] for d in json.loads(p.stdout)["devices"] if d["selected"]] == ["Living Room"]
 
 
+# Dominic's AirPods Pro as the Mac's output, as Control Center listed them (2026-11-20).
+LISTENING = {"title": "Listening Mode", "options": [{"title": "Transparency", "selected": True, "enabled": True},
+                                                    {"title": "Adaptive", "selected": False, "enabled": True},
+                                                    {"title": "Noise Cancellation", "selected": False, "enabled": True}]}
+SPATIAL = {"title": "Spatial Audio", "options": [{"title": "Not Available", "selected": False, "enabled": False}]}
+CONVERSATION = {"title": "Conversation Awareness", "options": [{"title": "Off", "selected": True, "enabled": True},
+                                                               {"title": "On", "selected": False, "enabled": True}]}
+PODS = "AirPods Pro - Find My"
+WITH_PODS = [{"name": "Mac mini Speakers", "selected": False}, {"name": PODS, "selected": True, "modes": [LISTENING, SPATIAL, CONVERSATION]},
+             {"name": "Living Room", "selected": False}]
+
+
+def test_reads_the_modes_of_the_airpods(vm):
+    p, _ = vm(lambda r: (200, dict(STATE, devices=WITH_PODS, ms=1012)), "read", "--json")
+    assert p.returncode == 0, p.stderr
+    assert json.loads(p.stdout)["devices"] == WITH_PODS
+    p, _ = vm(lambda r: (200, dict(STATE, devices=WITH_PODS)), "read")
+    assert p.stdout.splitlines()[1:6] == [f"* {PODS}", "    Listening Mode: *Transparency  Adaptive  Noise Cancellation",
+                                          "    Spatial Audio: Not Available (not offered)", "    Conversation Awareness: *Off  On",
+                                          "  Living Room"]
+
+
+def test_switches_a_mode(vm):
+    def app(r):
+        m = r["body"]["mode"]
+        modes = [dict(g, options=[dict(o, selected=o["title"] == m["option"]) for o in g["options"]]) if g["title"] == m["group"] else g
+                 for g in WITH_PODS[1]["modes"]]
+        return 200, dict(STATE, devices=[WITH_PODS[0], dict(WITH_PODS[1], modes=modes), WITH_PODS[2]])
+    p, reqs = vm(app, "mode", PODS, "Listening Mode", "Noise Cancellation", "--json")
+    assert p.returncode == 0, p.stderr
+    assert reqs[-1]["method"] == "POST" and reqs[-1]["body"] == {"mode": {"device": PODS, "group": "Listening Mode", "option": "Noise Cancellation"}}
+    listening = json.loads(p.stdout)["devices"][1]["modes"][0]
+    assert [o["title"] for o in listening["options"] if o["selected"]] == ["Noise Cancellation"]
+    p, _ = vm(lambda r: (409, {"code": "no-option", "error": "no"}), "mode", PODS, "Spatial Audio", "Not Available", "--json")
+    assert p.returncode == 4 and json.loads(p.stdout)["code"] == "no-option"
+
+
 def test_sets_the_balance(vm):
     p, reqs = vm(lambda r: (200, dict(STATE, balance={"value": r["body"]["balance"], "settable": True})), "balance", "25", "--json")
     assert p.returncode == 0, p.stderr
@@ -94,7 +131,7 @@ def test_opens_the_macs_settings(vm):
 
 
 def test_the_app_says_no(vm):
-    for status, code in [(403, "accessibility"), (409, "busy"), (409, "not-front"), (409, "no-device"),
+    for status, code in [(403, "accessibility"), (409, "busy"), (409, "not-front"), (409, "no-device"), (409, "no-option"),
                          (409, "interrupted"), (409, "no-balance"), (501, "unsupported")]:
         p, _ = vm(lambda r, s=status, c=code: (s, {"code": c, "error": "no"}), "read", "--json")
         assert p.returncode == 4, (status, code, p.stderr)
@@ -117,7 +154,8 @@ def test_not_an_app_vm(vm):
 
 
 def test_usage(vm):
-    for args in (["press"], ["press", ""], ["balance", "left"], ["balance", "101"], ["volume", "5"], ["read", "now"]):
+    for args in (["press"], ["press", ""], ["balance", "left"], ["balance", "101"], ["volume", "5"], ["read", "now"],
+                 ["mode", PODS, "Listening Mode"], ["mode", PODS, "", "Adaptive"], ["mode", PODS, "Listening Mode", "Adaptive", "now"]):
         p, reqs = vm(lambda r: (200, STATE), *args)
         assert p.returncode == 2 and reqs == [], args
 
@@ -128,5 +166,14 @@ def test_the_panel_gets_its_types(vm):
               "read", "--json")
     assert json.loads(p.stdout) == {"accessibility": False, "output": None, "balance": None,
                                     "devices": [{"name": "Living Room", "selected": False}]}
+    p, _ = vm(lambda r: (200, {"accessibility": True, "output": None, "balance": None, "devices": [
+        {"name": PODS, "selected": True, "modes": [
+            {"title": "Listening Mode", "options": [{"title": "Adaptive", "selected": 1}, {"title": ""}, "Off", {"title": "On", "enabled": True}]},
+            {"title": "Spatial Audio", "options": []}, {"title": 3, "options": [{"title": "On"}]}, {"options": [{"title": "On"}]}]},
+        {"name": "Living Room", "selected": False, "modes": "none"}]}), "read", "--json")
+    assert json.loads(p.stdout)["devices"] == [
+        {"name": PODS, "selected": True, "modes": [{"title": "Listening Mode", "options": [
+            {"title": "Adaptive", "selected": False, "enabled": False}, {"title": "On", "selected": False, "enabled": True}]}]},
+        {"name": "Living Room", "selected": False}]
     p, _ = vm(lambda r: (200, {"accessibility": True, "balance": {"value": 7, "settable": True}}), "--json")
     assert json.loads(p.stdout)["balance"] == {"value": 1.0, "settable": True}
