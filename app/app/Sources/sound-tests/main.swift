@@ -39,6 +39,26 @@ expect(SoundList.rows([SoundElement(depth: 0, role: "AXCheckBox", identifier: "c
                        SoundElement(depth: 0, role: "AXButton", identifier: "sound-device-Living Room")]).isEmpty,
        "the Sound module's own button, a row without a name and a button are no devices")
 
+// The same Mac with AirPods Pro as its output (2026-11-20): their modes are
+// checkboxes with the AirPods' identifier too, after their own row, whose
+// description also has the battery.
+let airPods = "sound-device-AirPods Pro - Find My"
+func option(_ title: String, _ value: String) -> SoundElement {
+    SoundElement(depth: 3, role: "AXCheckBox", subrole: "AXToggle", identifier: airPods, description: title, value: value)
+}
+let withAirPods = SoundList.rows([
+    SoundElement(depth: 3, role: "AXCheckBox", subrole: "AXToggle", identifier: "sound-device-Studio Display XDR Speakers", description: "Studio Display XDR Speakers", value: "0"),
+    SoundElement(depth: 3, role: "AXDisclosureTriangle", identifier: airPods, description: "Go Down", value: "1"),
+    option("AirPods Pro - Find My, 100%, 90%", "1"),
+    SoundElement(depth: 3, role: "AXHeading", identifier: airPods, description: "Listening Mode"),
+    option("Transparency", "0"), option("Adaptive", "0"), option("Noise Cancellation", "1"),
+    SoundElement(depth: 3, role: "AXHeading", identifier: airPods, description: "Conversation Awareness"),
+    option("Off", "1"), option("On", "0"),
+    SoundElement(depth: 3, role: "AXCheckBox", subrole: "AXToggle", identifier: "sound-device-Living Room", description: "Living Room", value: "0")])
+expect(withAirPods == [SoundRow(name: "Studio Display XDR Speakers", selected: false), SoundRow(name: "AirPods Pro - Find My", selected: true),
+                       SoundRow(name: "Living Room", selected: false)],
+       "AirPods with their modes open: one device, by its identifier, and none for a mode")
+
 // A press of Living Room on the HomePod, as Control Center's list moved
 // (2026-11-20): the display's checkmark went after 16 ms, the HomePod's came
 // after 420 ms, when it was connected.

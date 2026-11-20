@@ -201,6 +201,7 @@ public final class SoundPicker {
             return now
         }
 
+        /// The device's own row: the first checkbox with its identifier.
         func press(_ identifier: String) throws {
             guard let e = try scan().first(where: { $0.0.identifier == identifier && $0.0.role == SoundList.rowRole })?.1,
                   AXUIElementPerformAction(e, kAXPressAction as CFString) == .success else { throw Failure.interrupted }

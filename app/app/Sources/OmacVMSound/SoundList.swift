@@ -22,13 +22,18 @@ public struct SoundRow: Equatable {
 public enum SoundList {
     /// The list's title, there only while the list shows.
     public static let title = "controlcenter-volume"
-    /// A device's row: this prefix, then the device's name.
+    /// A device's row: this prefix, then the device's name. Headphones that
+    /// play have more elements with their identifier after their row: the
+    /// headings and options of their modes (Listening Mode, Spatial Audio).
     public static let rowPrefix = "sound-device-"
     public static let rowRole = "AXCheckBox"
 
+    /// The devices: of the checkboxes with one identifier, the first.
     public static func rows(_ elements: [SoundElement]) -> [SoundRow] {
-        elements.compactMap { e in
-            guard e.role == rowRole, e.identifier.hasPrefix(rowPrefix), e.identifier.count > rowPrefix.count else { return nil }
+        var seen = Set<String>()
+        return elements.compactMap { e in
+            guard e.role == rowRole, e.identifier.hasPrefix(rowPrefix), e.identifier.count > rowPrefix.count,
+                  seen.insert(e.identifier).inserted else { return nil }
             return SoundRow(name: String(e.identifier.dropFirst(rowPrefix.count)), selected: e.value == "1")
         }
     }
