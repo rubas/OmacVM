@@ -1,0 +1,53 @@
+import Foundation
+
+/// One element of Control Center's Sound list, as Accessibility gives it.
+public struct SoundElement: Equatable {
+    public var depth: Int
+    public var role, subrole, identifier, description, value: String
+    public init(depth: Int, role: String, subrole: String = "", identifier: String = "", description: String = "", value: String = "") {
+        self.depth = depth; self.role = role; self.subrole = subrole
+        self.identifier = identifier; self.description = description; self.value = value
+    }
+}
+
+/// A device in the list. `selected`: sound plays there (macOS's checkmark).
+public struct SoundRow: Equatable {
+    public var name: String
+    public var selected: Bool
+    public init(name: String, selected: Bool) { self.name = name; self.selected = selected }
+}
+
+/// What Control Center's Sound list says (SoundPicker reads it), without
+/// Accessibility: the rules are tested on recorded lists (sound-tests).
+public enum SoundList {
+    /// The list's title, there only while the list shows.
+    public static let title = "controlcenter-volume"
+    /// A device's row: this prefix, then the device's name. Headphones that
+    /// play have more elements with their identifier after their row: the
+    /// headings and options of their modes (Listening Mode, Spatial Audio).
+    public static let rowPrefix = "sound-device-"
+    public static let rowRole = "AXCheckBox"
+
+    /// The devices: of the checkboxes with one identifier, the first.
+    public static func rows(_ elements: [SoundElement]) -> [SoundRow] {
+        var seen = Set<String>()
+        return elements.compactMap { e in
+            guard e.role == rowRole, e.identifier.hasPrefix(rowPrefix), e.identifier.count > rowPrefix.count,
+                  seen.insert(e.identifier).inserted else { return nil }
+            return SoundRow(name: String(e.identifier.dropFirst(rowPrefix.count)), selected: e.value == "1")
+        }
+    }
+
+    /// The devices with the checkmark.
+    public static func playing(_ rows: [SoundRow]) -> Set<String> { Set(rows.filter(\.selected).map(\.name)) }
+
+    /// After a press of `name`: macOS is done once the row's checkmark
+    /// differs from before, or once the checkmarks moved (`moved`) and are
+    /// as before again: the speaker did not connect and macOS went back.
+    /// Only checkmarks count: a row that a read misses says nothing.
+    public static func pressDone(_ name: String, before: [SoundRow], now: [SoundRow], moved: Bool) -> Bool {
+        func selected(_ rows: [SoundRow]) -> Bool? { rows.first { $0.name == name }?.selected }
+        if let was = selected(before), let isNow = selected(now), was != isNow { return true }
+        return moved && playing(now) == playing(before)
+    }
+}

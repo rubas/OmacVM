@@ -5,6 +5,15 @@ in more words.
 
 ## Unreleased
 
+- **AirPlay and balance in the Audio panel.** The Audio panel in Omarchy's bar now lists the Mac's
+  AirPlay speakers and TVs after the Mac's own outputs, so you can click to switch.
+  When the Mac's current output supports it, such as
+  headphones, the panel also shows a left/right Balance slider. AirPlay needs OmacVM allowed under
+  Accessibility on the Mac (System Settings → Privacy & Security → Accessibility), the same
+  permission Keyboard access already uses. Because macOS offers no other way, OmacVM opens Control
+  Center out of sight for about a second to read the list or switch, and keys typed during that
+  second do not reach the VM. The panel reads the AirPlay list each time it opens. It is also
+  calmer: no status line and no numbers beside the sliders. It needs the app update and Update VM.
 - **Dismiss all notifications also closes the Mac's.** In full screen macOS shows its banners and
   alerts (such as *App Background Activity*) over the VM, where nothing in the VM reaches them.
   Omarchy's own Super+Shift+, now also closes the ones on the Mac's screen, through the Bridge
