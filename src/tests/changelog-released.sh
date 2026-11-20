@@ -3,13 +3,15 @@
 # it adds to CHANGELOG.md sits in a section whose heading was not a released
 # one ("## X.Y.Z" without "(unreleased)") at BASE. A release pull request
 # turns "## X.Y.Z (unreleased)" into "## X.Y.Z": that heading is new, fine.
+# "## Unreleased", without a version, is never a released one: a fork that
+# cuts no releases of its own keeps its changes there.
 # (#556 was cut against 3.2.4 (unreleased); after 3.2.4's release it would
 # have landed in the released 3.2.4 section.)
 #   src/tests/changelog-released.sh [BASE]   (default origin/main)
 set -uo pipefail
 R=$(cd "$(dirname "$0")/../.." && pwd)
 base=${1:-origin/main}
-released=$(git -C "$R" show "$base:CHANGELOG.md" | grep -E '^## ' | grep -v '(unreleased)') || {
+released=$(git -C "$R" show "$base:CHANGELOG.md" | grep -E '^## ' | grep -Ev '\(unreleased\)|^## Unreleased$') || {
   echo "FAIL no CHANGELOG.md at $base"; exit 1; }
 added=$(git -C "$R" diff -U0 "$base" -- CHANGELOG.md | awk '/^@@/ {
   split($3, a, ","); n = substr(a[1], 2); c = (a[2] == "" ? 1 : a[2]); for (i = 0; i < c; i++) print n + i }')
