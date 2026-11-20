@@ -934,7 +934,7 @@ Panel {
   // without borders (Omarchy's Button), wrapped when they do not fit. Title
   // and options start on the edge of the row's name. The selected option has
   // the fill and the weight of the output that plays; an option macOS shows
-  // but does not offer ("Not Available") is dimmed and takes no press. One
+  // but does not offer is dimmed and takes no press. One
   // cursor stop: h/l walks the options, Enter or a click presses one, as a
   // click in Control Center. The press on its way is the group's spinner, at
   // the rows' checkmarks; the selection is macOS's word.
@@ -943,7 +943,7 @@ Panel {
     required property var device
     required property var group
 
-    readonly property bool hasCursor: group.stop >= 0 && root.cursorActive && root.focusSection === "output" && root.selectedIndex === group.stop
+    readonly property bool hasCursor: root.cursorActive && root.focusSection === "output" && root.selectedIndex === group.stop
     readonly property bool busy: !!sound.switching && sound.switching.device === device.name && sound.switching.group === group.title
     // The rows' name edge, and an option's text on it: its fill reaches out by its padding.
     readonly property real inset: Style.space(6) + Style.space(22) + Style.space(8)

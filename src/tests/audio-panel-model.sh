@@ -73,9 +73,12 @@ const podsListed = (output, selected) => ({ accessibility: true, devicesOutput: 
 const groups = rows => rows.map(r => r.name + ":" + (r.modes || []).map(g => g.title).join("/"))
 
 l = M.outputLists(onPods, bluetooth, podsListed(pods.uid, true))
-expect(same(groups(l.outputs), ["AirPods Pro - Find My:Listening Mode/Spatial Audio/Conversation Awareness", "Studio Display XDR Speakers:", "Mac mini Speakers:"])
+expect(same(groups(l.outputs), ["AirPods Pro - Find My:Listening Mode/Conversation Awareness", "Studio Display XDR Speakers:", "Mac mini Speakers:"])
   && same(names(l.airplay), ["Living Room"]),
-  "the AirPods play: their row, once, has macOS's groups of modes, and no other row has any")
+  "the AirPods play: their row, once, has macOS's groups of modes, and no other row has any; Spatial Audio, whose one option macOS does not offer, is not shown")
+const noneOffered = podsListed(pods.uid, true)
+noneOffered.devices[2] = Object.assign({}, noneOffered.devices[2], { modes: [modes[1]] })
+expect(!M.outputLists(onPods, bluetooth, noneOffered).outputs[0].modes, "AirPods with no option offered at all: no modes under their row")
 expect(same(groups(M.outputLists(onPods, bluetooth, podsListed("AppleUSBAudioEngine:display:10,11", false)).outputs)[0], "AirPods Pro - Find My:"),
   "a list read for another output: no modes, as nobody knows them for the AirPods now")
 const podsIdle = Object.assign({}, pods, { default_output: false })
@@ -88,14 +91,14 @@ const stops = M.outputStops(l.outputs, l.airplay)
 expect(same(stops.map(s => s.row.name + (s.group ? " > " + s.group.title : "")),
   ["AirPods Pro - Find My", "AirPods Pro - Find My > Listening Mode", "AirPods Pro - Find My > Conversation Awareness",
    "Studio Display XDR Speakers", "Mac mini Speakers", "Living Room"]),
-  "the cursor: the AirPods' row, a stop per group under it, then the other rows; Spatial Audio, which offers nothing, is no stop")
-expect(same([l.outputs[0].stop, l.outputs[0].modes.map(g => g.stop), l.airplay[0].stop], [0, [1, -1, 2], 5]),
+  "the cursor: the AirPods' row, a stop per group under it, then the other rows")
+expect(same([l.outputs[0].stop, l.outputs[0].modes.map(g => g.stop), l.airplay[0].stop], [0, [1, 2], 5]),
   "each row and group knows its stop")
-const listening = l.outputs[0].modes[0], spatial = l.outputs[0].modes[1]
+const listening = l.outputs[0].modes[0]
 expect(M.optionCursor(listening, -1, 0) === 0 && M.optionCursor(listening, 0, 1) === 1 && M.optionCursor(listening, 2, 1) === 2 && M.optionCursor(listening, 0, -1) === 0,
   "on Listening Mode the cursor lands on Transparency, which macOS selected, and h/l walk the options and stop at the ends")
 const someOff = { title: "Spatial Audio", options: [option("Off", false), option("Fixed", true, false), option("Head Tracked", false)] }
-expect(M.optionCursor(someOff, -1, 0) === 0 && M.optionCursor(someOff, 0, 1) === 2 && M.optionCursor(spatial, -1, 0) === -1,
+expect(M.optionCursor(someOff, -1, 0) === 0 && M.optionCursor(someOff, 0, 1) === 2,
   "an option macOS does not offer is never under the cursor, also when it is selected")
 process.exit(failed ? 1 : 0)
 JS
