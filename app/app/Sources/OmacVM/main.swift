@@ -1037,7 +1037,7 @@ if CommandLine.arguments.dropFirst().first == "--sound" {
     if args == ["tree"] {
         print(sound.tree())
     } else if let method = args.first, args.count <= 2 {
-        let (status, body) = sound.answer(method: method, body: args.count == 2 ? Data(args[1].utf8) : nil, front: true)
+        let (status, body) = sound.answer(method: method, body: args.count == 2 ? Data(args[1].utf8) : nil) { true }
         let answer = (try? JSONSerialization.data(withJSONObject: ["status": status, "body": body], options: [.sortedKeys])) ?? Data("{}".utf8)
         print(String(decoding: answer, as: UTF8.self))
     } else {

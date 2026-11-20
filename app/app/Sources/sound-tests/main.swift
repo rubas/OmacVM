@@ -52,14 +52,15 @@ expect(SoundList.pressDone("Living Room", before: onDisplay, now: onDisplay, mov
 expect(SoundList.pressDone("Living Room", before: onHomePod, now: connecting, moved: true), "a press of the playing HomePod takes its checkmark: done")
 expect(!SoundList.pressDone("Living Room", before: onDisplay, now: SoundList.rows(list(display: "0", livingRoom: "0")).dropLast(), moved: true),
        "the row is gone for a moment: not done")
+expect(SoundList.playing(onDisplay.dropLast()) == SoundList.playing(onDisplay),
+       "a row without a checkmark that one read misses moves nothing")
 
 // The route's rules.
 func body(_ s: String) -> Data { Data(s.utf8) }
-func parse(_ method: String, _ b: String? = nil, front: Bool = true) -> Result<SoundGuest.Request, SoundGuest.Refusal> {
-    SoundGuest.parse(method: method, body: b.map(body), front: front)
+func parse(_ method: String, _ b: String? = nil) -> Result<SoundGuest.Request, SoundGuest.Refusal> {
+    SoundGuest.parse(method: method, body: b.map(body))
 }
 expect(parse("GET") == .success(.state), "GET: the state")
-expect(parse("GET", front: false) == .success(.state), "GET: also for a VM in the background")
 expect(parse("GET", "{}") == .failure(.init(400, "bad-request")), "GET with a body: refused")
 expect(parse("POST", #"{"read": true}"#) == .success(.read), "POST read")
 expect(parse("POST", #"{"read": false}"#) == .failure(.init(400, "bad-request")), "read: false is nothing to do")
@@ -74,10 +75,20 @@ expect(parse("POST", #"{"balance": true}"#) == .failure(.init(400, "bad-request"
 expect(parse("POST", #"{"read": true, "press": "Living Room"}"#) == .failure(.init(400, "bad-request")), "two keys: refused")
 expect(parse("POST", #"["read"]"#) == .failure(.init(400, "bad-request")), "a body that is no object: refused")
 expect(parse("POST") == .failure(.init(400, "bad-request")), "POST without a body: refused")
-expect(parse("POST", #"{"press": "Living Room"}"#, front: false) == .failure(.init(409, "not-front")),
-       "a VM in the background cannot press")
-expect(parse("POST", #"{"balance": 0.5}"#, front: false) == .failure(.init(409, "not-front")), "nor set the balance")
-expect(parse("POST", #"{"nonsense": 1}"#, front: false) == .failure(.init(400, "bad-request")), "a bad request is a bad request, in front or not")
+
+// A VM in the background: the state, and nothing that opens Control Center or
+// changes the Mac's sound. Asked only when it matters, so not for a GET.
+let service = SoundService { _ in }
+var asked = 0
+func background(_ method: String, _ b: String? = nil) -> (Int, String) {
+    let (status, answer) = service.answer(method: method, body: b.map(body)) { asked += 1; return false }
+    return (status, answer["code"] as? String ?? "")
+}
+expect(background("GET").0 == 200 && asked == 0, "GET: the state, also for a VM in the background, without asking who is in front")
+expect(background("POST", #"{"read": true}"#) == (409, "not-front"), "a VM in the background cannot read the list")
+expect(background("POST", #"{"press": "Living Room"}"#) == (409, "not-front"), "nor press a device")
+expect(background("POST", #"{"balance": 0.5}"#) == (409, "not-front"), "nor set the balance")
+expect(background("POST", #"{"nonsense": 1}"#) == (400, "bad-request"), "a bad request is a bad request, in front or not")
 expect(parse("PUT") == .failure(.init(405, "method")), "another method: refused")
 
 // The answers.

@@ -82,18 +82,15 @@ function deviceRows(audio, wantOutput) {
 //   outputs  CoreAudio's outputs, then the headsets macOS offers
 //   airplay  every other device macOS lists: AirPlay speakers and TVs
 // While AirPlay plays, CoreAudio has one device for it, whatever the
-// speakers: it is left out, the speakers' rows stand for it. Their
-// checkmarks are the ones macOS's list had when it was read (sound.output is
-// the default output's uid then): with another output since, on AirPlay
-// again, nobody knows which speakers play (airplayKnown false).
+// speakers: it is left out once a speaker's row has the checkmark and stands
+// for it. The checkmarks are the ones macOS's list had when it was read
+// (sound.devicesOutput is the default output's uid then): with another
+// output since, on AirPlay again, nobody knows which speakers play
+// (airplayKnown false), and CoreAudio's device keeps its row.
 function outputLists(audio, bluetooth, sound) {
-  var outputs = []
+  var outputs = deviceRows(audio, true)
   var known = {}
-  var all = deviceRows(audio, true)
-  for (var i = 0; i < all.length; i++) {
-    known[all[i].name] = true
-    if (all[i].transport !== "airplay") outputs.push(all[i])
-  }
+  for (var i = 0; i < outputs.length; i++) known[outputs[i].name] = true
   var paired = {}
   var bt = bluetooth && Array.isArray(bluetooth.devices) ? bluetooth.devices : []
   for (var b = 0; b < bt.length; b++) {
@@ -102,8 +99,9 @@ function outputLists(audio, bluetooth, sound) {
   var output = audio && audio.output ? audio.output : null
   var onAirplay = !!output && output.transport === "airplay"
   var listed = sound && Array.isArray(sound.devices) ? sound.devices : []
-  var fresh = !!sound && !!output && sound.output === output.uid
+  var fresh = !!sound && !!output && sound.devicesOutput === output.uid
   var airplay = []
+  var playing = false
   for (var d = 0; d < listed.length; d++) {
     var name = String(listed[d].name || "")
     if (!name || known[name]) continue
@@ -115,10 +113,12 @@ function outputLists(audio, bluetooth, sound) {
     } else {
       row.transport = "airplay"
       row.active = onAirplay && fresh && !!listed[d].selected
+      playing = playing || row.active
       airplay.push(row)
     }
   }
-  return { outputs: outputs, airplay: airplay, airplayKnown: !onAirplay || (fresh && sound.devices !== null) }
+  if (playing) outputs = outputs.filter(function(o) { return o.transport !== "airplay" })
+  return { outputs: outputs, airplay: airplay, airplayKnown: !onAirplay || playing }
 }
 
 // Why a read or a press of macOS's Sound list did not work, by the app's code.

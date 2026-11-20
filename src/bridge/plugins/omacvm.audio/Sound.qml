@@ -25,8 +25,10 @@ Item {
   property string output: ""
   // { value: 0 left ... 1 right, settable }, or null: the output has none.
   property var balance: null
-  // [{ name, selected }] as macOS listed them last, or null: not read yet.
+  // [{ name, selected }] as macOS listed them last, or null: not read yet;
+  // and the Mac's output then, which the checkmarks are for.
   property var devices: null
+  property string devicesOutput: ""
 
   // The device whose press is on its way, and whether the list is being read.
   property string pressing: ""
@@ -76,7 +78,10 @@ Item {
     accessibility = a.accessibility
     output = a.output || ""
     balance = a.balance || null
-    if (Array.isArray(a.devices)) devices = a.devices
+    if (Array.isArray(a.devices)) {
+      devicesOutput = output
+      devices = a.devices
+    }
     return ""
   }
 

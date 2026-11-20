@@ -46,7 +46,13 @@ What Control Center costs, measured the same day:
 - While it is open, also off screen, Control Center has the Mac's keyboard:
   keys typed then reached neither TextEdit nor anything else, and neither
   `AXRaise`, `AXMain`, `AXFrontmost` nor an activation of the app in front
-  gave them back. A click anywhere closes it.
+  gave them back. A click anywhere closes it. Once it is closed, the app in
+  front has the keyboard again without a click.
+- Over an app in a full-screen Space of its own that hides the menu bar, as
+  OmacVM's QEMU does (`NSApplicationPresentationHideMenuBar`), all of this
+  is the same, and no menu bar shows. Over one that only auto-hides it
+  (TextEdit), macOS slides the menu bar in for the session. Tried with a
+  test app, not with a VM: QEMU's own key tap may behave differently.
 - One round (open, list, close) takes about 1.0 s, a press of a HomePod
   about 1.5 s.
 
@@ -75,7 +81,12 @@ titles and action names follow the Mac's language.
 The guest is untrusted: one exact path, a body of exactly one known key, a
 device only by a name the list has at that moment, and every POST only while
 this VM's window is the app in front, because a session takes the Mac's
-keyboard for a second. One session at a time.
+keyboard for a second. The app asks who is in front at the moment it would
+open Control Center, and refuses a request that comes while a session runs
+("busy") instead of queueing it: a queue would run on after the person left
+the VM. The route is the feature bridge's: with it off the app answers as one
+without the route. There is no rate limit: a VM in front that asks in a loop
+keeps the Mac's keyboard away until the person clicks out of it.
 
 In the VM, `omacvm sound [read | press NAME | balance PERCENT] --json` asks
 the app, and the panel (`Sound.qml`) runs it:
@@ -120,3 +131,5 @@ For both: `OmacVM --sound tree` on a Mac that shows them.
   `com.apple.MenuBarAgent` in 26, and the app looks in both places.
 - A read at every opening of the panel would keep the list fresh and cost
   the keyboard for a second each time; the panel does not do that.
+- Control Center names a row by the device's name alone. Of two devices
+  with one name, a press reaches the first.

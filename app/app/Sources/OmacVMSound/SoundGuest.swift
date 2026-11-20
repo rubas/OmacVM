@@ -26,7 +26,10 @@ import Foundation
 /// keys, a device only by a name the list has right now, and every POST
 /// only while this VM's window is the app in front. A read or a press opens
 /// Control Center (off screen), which has the Mac's keyboard for that
-/// second: a VM in the background must not do that to the one in front.
+/// second: a VM in the background must not do that to the app in front. So
+/// the app asks who is in front at the moment it would open Control Center,
+/// and a request that comes while a session runs is refused ("busy"), not
+/// queued: a queue would run on after the person left the VM.
 public enum SoundGuest {
     public static let path = "/omacvm/app/sound"
 
@@ -42,14 +45,14 @@ public enum SoundGuest {
         public init(_ status: Int, _ code: String) { self.status = status; self.code = code }
     }
 
-    public static func parse(method: String, body: Data?, front: Bool) -> Result<Request, Refusal> {
+    public static func parse(method: String, body: Data?) -> Result<Request, Refusal> {
         switch method {
         case "GET":
             return body == nil ? .success(.state) : .failure(Refusal(400, "bad-request"))
         case "POST":
             guard let body, let o = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any], o.count == 1,
                   let request = request(o) else { return .failure(Refusal(400, "bad-request")) }
-            return front ? .success(request) : .failure(Refusal(409, "not-front"))
+            return .success(request)
         default:
             return .failure(Refusal(405, "method"))
         }
@@ -81,7 +84,7 @@ public enum SoundGuest {
         case "bad-request": return "send {\"read\": true}, {\"press\": NAME} or {\"balance\": 0...1}"
         case "not-front": return "only while this VM's window is in front"
         case "accessibility": return "OmacVM is not allowed under Accessibility on the Mac"
-        case "busy": return "Control Center is open on the Mac"
+        case "busy": return "Control Center is open on the Mac, or OmacVM is still at the last request"
         case "unsupported": return "this macOS has no Sound list in Control Center that OmacVM can read"
         case "no-device": return "macOS does not list that device now"
         case "interrupted": return "Control Center closed before macOS was done"
@@ -104,7 +107,7 @@ public enum SoundGuest {
 }
 
 /// Answers SoundGuest's requests on this Mac. One Control Center session at
-/// a time: a second request waits for the first.
+/// a time: a request during one is refused.
 public final class SoundService: @unchecked Sendable {
     private let lock = NSLock()
     private let picker = SoundPicker()
@@ -112,15 +115,17 @@ public final class SoundService: @unchecked Sendable {
 
     public init(log: @escaping (String) -> Void) { self.log = log }
 
-    public func answer(method: String, body: Data?, front: Bool) -> (Int, [String: Any]) {
+    /// `front`: this VM's window is the app in front, asked when it matters.
+    public func answer(method: String, body: Data?, front: () -> Bool) -> (Int, [String: Any]) {
         func refuse(_ r: SoundGuest.Refusal) -> (Int, [String: Any]) { (r.status, ["code": r.code, "error": SoundGuest.error(r.code)]) }
         func state() -> [String: Any] { SoundGuest.state(accessibility: SoundPicker.trusted, output: SoundOutput.uid, balance: SoundOutput.balance) }
-        switch SoundGuest.parse(method: method, body: body, front: front) {
+        switch SoundGuest.parse(method: method, body: body) {
         case .failure(let r):
             return refuse(r)
         case .success(.state):
             return (200, state())
         case .success(.balance(let value)):
+            guard front() else { return refuse(SoundGuest.Refusal(409, "not-front")) }
             guard SoundOutput.setBalance(value) else { return refuse(SoundGuest.Refusal(409, "no-balance")) }
             return (200, state())
         case .success(.read):
@@ -130,7 +135,9 @@ public final class SoundService: @unchecked Sendable {
         }
 
         func list(_ what: String, _ work: () throws -> (elements: [SoundElement], took: Double)) -> (Int, [String: Any]) {
-            lock.lock(); defer { lock.unlock() }
+            guard lock.try() else { return refuse(SoundGuest.refusal(.open)) }
+            defer { lock.unlock() }
+            guard front() else { return refuse(SoundGuest.Refusal(409, "not-front")) }
             do {
                 let (elements, took) = try work()
                 let ms = Int((took * 1000).rounded())
@@ -152,7 +159,6 @@ public final class SoundService: @unchecked Sendable {
     /// `OmacVM --sound tree`: what to send along when a macOS shows a list
     /// this code cannot read.
     public func tree() -> String {
-        lock.lock(); defer { lock.unlock() }
         do {
             return try picker.read().elements.map { e in
                 String(repeating: "  ", count: e.depth) + [e.role, e.subrole, e.identifier, e.description, e.value].joined(separator: "|")
