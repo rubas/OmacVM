@@ -39,25 +39,86 @@ expect(SoundList.rows([SoundElement(depth: 0, role: "AXCheckBox", identifier: "c
                        SoundElement(depth: 0, role: "AXButton", identifier: "sound-device-Living Room")]).isEmpty,
        "the Sound module's own button, a row without a name and a button are no devices")
 
-// The same Mac with AirPods Pro as its output (2026-11-20): their modes are
-// checkboxes with the AirPods' identifier too, after their own row, whose
-// description also has the battery.
+// The same Mac with AirPods Pro as its output, as Accessibility gave it
+// (2026-11-20, evidence airpods-tree-2 to -4): everything of the AirPods has
+// their identifier. A disclosure triangle before their row (1: open), the
+// row, whose description also has the battery, then per group of modes a
+// heading and its options. "Not Available" is not enabled.
 let airPods = "sound-device-AirPods Pro - Find My"
-func option(_ title: String, _ value: String) -> SoundElement {
-    SoundElement(depth: 3, role: "AXCheckBox", subrole: "AXToggle", identifier: airPods, description: title, value: value)
+func airPodsList(listening: String = "Transparency", notAvailable: String = "0", open: Bool = true, playing: String = "1") -> [SoundElement] {
+    func option(_ title: String, _ value: String, enabled: Bool = true) -> SoundElement {
+        SoundElement(depth: 3, role: "AXCheckBox", subrole: "AXToggle", identifier: airPods, description: title, value: value, enabled: enabled)
+    }
+    func heading(_ title: String) -> SoundElement { SoundElement(depth: 3, role: "AXHeading", identifier: airPods, description: title) }
+    func device(_ name: String) -> SoundElement {
+        SoundElement(depth: 3, role: "AXCheckBox", subrole: "AXToggle", identifier: "sound-device-" + name, description: name, value: "0")
+    }
+    // With Adaptive selected, its level control: three images between the options.
+    let level = listening != "Adaptive" ? [] : ["Dotted Circle", "Person And Sparkles, Filled", "Circle"].map {
+        SoundElement(depth: 3, role: "AXImage", identifier: airPods, description: $0)
+    }
+    let modes = [heading("Listening Mode"), option("Transparency", listening == "Transparency" ? "1" : "0"),
+                 option("Adaptive", listening == "Adaptive" ? "1" : "0")] + level
+        + [option("Noise Cancellation", listening == "Noise Cancellation" ? "1" : "0"),
+           heading("Spatial Audio"), option("Not Available", notAvailable, enabled: false),
+           heading("Conversation Awareness"), option("Off", "1"), option("On", "0")]
+    return [SoundElement(depth: 0, role: "AXWindow", subrole: "AXSystemDialog"),
+            SoundElement(depth: 1, role: "AXGroup", subrole: "AXHostingView"),
+            SoundElement(depth: 2, role: "AXStaticText", identifier: "controlcenter-volume", value: "Sound"),
+            SoundElement(depth: 2, role: "AXSlider", identifier: "controlcenter-volume-slider", description: "sound volume", value: "0.5"),
+            SoundElement(depth: 3, role: "AXValueIndicator"),
+            SoundElement(depth: 2, role: "AXSlider", identifier: "controlcenter-volume-slider", description: "sound volume", value: "0.5"),
+            SoundElement(depth: 2, role: "AXScrollArea"),
+            SoundElement(depth: 3, role: "AXHeading", description: "Output"),
+            device("Mac mini Speakers"), device("Studio Display XDR Speakers"),
+            SoundElement(depth: 3, role: "AXDisclosureTriangle", identifier: airPods, description: open ? "Go Down" : "Forward", value: open ? "1" : "0"),
+            SoundElement(depth: 3, role: "AXCheckBox", subrole: "AXToggle", identifier: airPods, description: "AirPods Pro - Find My, 100%, 90%", value: playing)]
+        + (open ? modes : [])
+        + [device("Living Room"),
+           SoundElement(depth: 2, role: "AXButton", description: "AirPods Pro - Find My Settings…"),
+           SoundElement(depth: 2, role: "AXButton", description: "Sound Settings…")]
 }
-let withAirPods = SoundList.rows([
-    SoundElement(depth: 3, role: "AXCheckBox", subrole: "AXToggle", identifier: "sound-device-Studio Display XDR Speakers", description: "Studio Display XDR Speakers", value: "0"),
-    SoundElement(depth: 3, role: "AXDisclosureTriangle", identifier: airPods, description: "Go Down", value: "1"),
-    option("AirPods Pro - Find My, 100%, 90%", "1"),
-    SoundElement(depth: 3, role: "AXHeading", identifier: airPods, description: "Listening Mode"),
-    option("Transparency", "0"), option("Adaptive", "0"), option("Noise Cancellation", "1"),
-    SoundElement(depth: 3, role: "AXHeading", identifier: airPods, description: "Conversation Awareness"),
-    option("Off", "1"), option("On", "0"),
-    SoundElement(depth: 3, role: "AXCheckBox", subrole: "AXToggle", identifier: "sound-device-Living Room", description: "Living Room", value: "0")])
-expect(withAirPods == [SoundRow(name: "Studio Display XDR Speakers", selected: false), SoundRow(name: "AirPods Pro - Find My", selected: true),
-                       SoundRow(name: "Living Room", selected: false)],
-       "AirPods with their modes open: one device, by its identifier, and none for a mode")
+func listening(_ selected: String) -> SoundMode {
+    SoundMode(title: "Listening Mode", options: ["Transparency", "Adaptive", "Noise Cancellation"].map { SoundOption(title: $0, selected: $0 == selected) })
+}
+let conversation = SoundMode(title: "Conversation Awareness", options: [SoundOption(title: "Off", selected: true), SoundOption(title: "On", selected: false)])
+let pods = "AirPods Pro - Find My"
+let withAirPods = airPodsList()
+expect(SoundList.rows(withAirPods) == [
+    SoundRow(name: "Mac mini Speakers", selected: false), SoundRow(name: "Studio Display XDR Speakers", selected: false),
+    SoundRow(name: pods, selected: true, modes: [
+        listening("Transparency"),
+        SoundMode(title: "Spatial Audio", options: [SoundOption(title: "Not Available", selected: false, enabled: false)]),
+        conversation]),
+    SoundRow(name: "Living Room", selected: false)],
+       "AirPods with their modes open: one device, by its identifier, with macOS's three groups in its words, and none for a mode")
+let afterAdaptive = airPodsList(listening: "Adaptive", notAvailable: "1")
+expect(SoundList.rows(afterAdaptive).first { $0.name == pods }?.modes == [
+    listening("Adaptive"),
+    SoundMode(title: "Spatial Audio", options: [SoundOption(title: "Not Available", selected: true, enabled: false)]),
+    conversation],
+       "after a press of Adaptive: Adaptive selected, its level's images are no options, and a Not Available that is selected stays not enabled")
+let closed = airPodsList(open: false)
+expect(SoundList.rows(closed).first { $0.name == pods } == SoundRow(name: pods, selected: true), "the disclosure closed: the AirPods without modes")
+expect(SoundList.closedDisclosure(closed).map { closed[$0].role } == "AXDisclosureTriangle" && SoundList.closedDisclosure(withAirPods) == nil,
+       "the AirPods play and their disclosure is closed: it is opened before a read; open: left alone")
+expect(SoundList.closedDisclosure(airPodsList(open: false, playing: "0")) == nil, "the closed disclosure of a device that does not play: left alone")
+
+let rowsNow = SoundList.rows(withAirPods)
+expect(SoundList.option(rowsNow, device: pods, group: "Conversation Awareness", option: "On") == SoundOption(title: "On", selected: false)
+       && SoundList.option(rowsNow, device: pods, group: "Listening Mode", option: "On") == nil,
+       "an option by its group: On of Conversation Awareness, and no On under Listening Mode")
+expect(SoundList.option(rowsNow, device: pods, group: "Spatial Audio", option: "Not Available")?.enabled == false,
+       "Spatial Audio's Not Available: there, and not offered")
+expect(SoundList.optionIndex(withAirPods, device: pods, group: "Listening Mode", option: "Adaptive").map { withAirPods[$0].description } == "Adaptive"
+       && SoundList.optionIndex(afterAdaptive, device: pods, group: "Listening Mode", option: "Noise Cancellation").map { afterAdaptive[$0].description } == "Noise Cancellation",
+       "the option to press, found again in the list rebuilt after a press (with the level's images in it)")
+expect(SoundList.optionIndex(withAirPods, device: pods, group: "Listening Mode", option: "AirPods Pro - Find My, 100%, 90%") == nil
+       && SoundList.optionIndex(withAirPods, device: "Living Room", group: "Listening Mode", option: "Adaptive") == nil
+       && SoundList.optionIndex(closed, device: pods, group: "Listening Mode", option: "Adaptive") == nil,
+       "never the device's own row, never another device's, and nothing while the modes are closed")
+expect(SoundList.isList(withAirPods) && !SoundList.isList([SoundElement(depth: 0, role: "")]) && !SoundList.isList(Array(withAirPods.prefix(7))),
+       "a window that answers nothing, or a list being rebuilt without devices, is no list")
 
 // A press of Living Room on the HomePod, as Control Center's list moved
 // (2026-11-20): the display's checkmark went after 16 ms, the HomePod's came
@@ -89,6 +150,16 @@ expect(parse("POST", #"{"press": "Living Room"}"#) == .success(.press("Living Ro
 expect(parse("POST", #"{"press": ""}"#) == .failure(.init(400, "bad-request")), "press: no name")
 expect(parse("POST", #"{"press": "a\nb"}"#) == .failure(.init(400, "bad-request")), "press: a name with a line break")
 expect(parse("POST", "{\"press\": \"\(String(repeating: "a", count: 256))\"}") == .failure(.init(400, "bad-request")), "press: a name of 256 characters")
+let mode = #"{"mode": {"device": "AirPods Pro - Find My", "group": "Listening Mode", "option": "Adaptive"}}"#
+expect(parse("POST", mode) == .success(.mode(device: pods, group: "Listening Mode", option: "Adaptive")), "POST mode: a device, a group and an option")
+for bad in [#"{"mode": {"device": "AirPods", "group": "Listening Mode"}}"#,
+            #"{"mode": {"device": "AirPods", "group": "Listening Mode", "option": "Adaptive", "level": 1}}"#,
+            #"{"mode": {"device": "AirPods", "group": "Listening Mode", "option": ""}}"#,
+            #"{"mode": {"device": "AirPods", "group": "Listening\nMode", "option": "Adaptive"}}"#,
+            #"{"mode": {"device": "AirPods", "group": "Listening Mode", "option": 2}}"#,
+            #"{"mode": ["AirPods", "Listening Mode", "Adaptive"]}"#] {
+    expect(parse("POST", bad) == .failure(.init(400, "bad-request")), "mode refused: \(bad)")
+}
 expect(parse("POST", #"{"balance": 0.25}"#) == .success(.balance(0.25)), "POST balance")
 expect(parse("POST", #"{"allow": true}"#) == .success(.allow), "POST allow")
 expect(parse("POST", #"{"allow": "yes"}"#) == .failure(.init(400, "bad-request")), "allow: only true")
@@ -109,6 +180,7 @@ func background(_ method: String, _ b: String? = nil) -> (Int, String) {
 expect(background("GET").0 == 200 && asked == 0, "GET: the state, also for a VM in the background, without asking who is in front")
 expect(background("POST", #"{"read": true}"#) == (409, "not-front"), "a VM in the background cannot read the list")
 expect(background("POST", #"{"press": "Living Room"}"#) == (409, "not-front"), "nor press a device")
+expect(background("POST", mode) == (409, "not-front"), "nor switch a mode")
 expect(background("POST", #"{"balance": 0.5}"#) == (409, "not-front"), "nor set the balance")
 expect(background("POST", #"{"allow": true}"#) == (409, "not-front"), "nor open the Mac's settings")
 expect(background("POST", #"{"nonsense": 1}"#) == (400, "bad-request"), "a bad request is a bad request, in front or not")
@@ -123,9 +195,16 @@ expect(some["output"] as? String == "BuiltInSpeakerDevice", "the output's CoreAu
 expect((some["balance"] as? [String: Any])?["value"] as? NSNumber == NSDecimalNumber(string: "0.563")
        && (some["balance"] as? [String: Any])?["settable"] as? Bool == true, "the balance, rounded to three places")
 expect(String(decoding: try! JSONSerialization.data(withJSONObject: SoundGuest.devices(onHomePod.suffix(1)), options: [.sortedKeys]), as: UTF8.self)
-       == #"[{"name":"Living Room","selected":true}]"#, "a device in the answer: its name and its checkmark")
+       == #"[{"name":"Living Room","selected":true}]"#, "a device in the answer: its name and its checkmark, and no modes without them")
+expect(String(decoding: try! JSONSerialization.data(withJSONObject: SoundGuest.devices(Array(SoundList.rows(withAirPods)[2...2])), options: [.sortedKeys]), as: UTF8.self)
+       == #"[{"modes":[{"options":[{"enabled":true,"selected":true,"title":"Transparency"},{"enabled":true,"selected":false,"title":"Adaptive"},"#
+        + #"{"enabled":true,"selected":false,"title":"Noise Cancellation"}],"title":"Listening Mode"},"#
+        + #"{"options":[{"enabled":false,"selected":false,"title":"Not Available"}],"title":"Spatial Audio"},"#
+        + #"{"options":[{"enabled":true,"selected":true,"title":"Off"},{"enabled":true,"selected":false,"title":"On"}],"title":"Conversation Awareness"}],"#
+        + #""name":"AirPods Pro - Find My","selected":true}]"#,
+       "the AirPods in the answer: their modes as macOS's groups, each option with its checkmark and whether it is offered")
 for (failure, code) in [(SoundPicker.Failure.notTrusted, "accessibility"), (.open, "busy"), (.unsupported("why"), "unsupported"),
-                        (.noDevice("Kitchen"), "no-device"), (.interrupted, "interrupted")] {
+                        (.noDevice("Kitchen"), "no-device"), (.noOption, "no-option"), (.interrupted, "interrupted")] {
     let r = SoundGuest.refusal(failure)
     expect(r.code == code && SoundGuest.error(code) != SoundGuest.error("method"), "\(failure): \(r.status) \(code), with a text of its own")
 }
