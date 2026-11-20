@@ -165,8 +165,8 @@ def sound(args: list) -> int:
     import json
 
     usage = "omacvm sound [read | press NAME | balance PERCENT] [--json]"
-    as_json = "--json" in args
-    words = [a for a in args if a != "--json"]
+    as_json = args[-1:] == ["--json"]   # last, so a device may have any name
+    words = args[:-1] if as_json else list(args)
     body, timeout = None, 3.0
     if words == ["read"]:
         body, timeout = {"read": True}, 10.0

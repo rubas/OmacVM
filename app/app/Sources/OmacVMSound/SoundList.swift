@@ -33,12 +33,16 @@ public enum SoundList {
         }
     }
 
+    /// The devices with the checkmark.
+    public static func playing(_ rows: [SoundRow]) -> Set<String> { Set(rows.filter(\.selected).map(\.name)) }
+
     /// After a press of `name`: macOS is done once the row's checkmark
-    /// differs from before, or once the list moved and is as before again
-    /// (the speaker did not connect and macOS went back).
+    /// differs from before, or once the checkmarks moved (`moved`) and are
+    /// as before again: the speaker did not connect and macOS went back.
+    /// Only checkmarks count: a row that a read misses says nothing.
     public static func pressDone(_ name: String, before: [SoundRow], now: [SoundRow], moved: Bool) -> Bool {
         func selected(_ rows: [SoundRow]) -> Bool? { rows.first { $0.name == name }?.selected }
         if let was = selected(before), let isNow = selected(now), was != isNow { return true }
-        return moved && now == before
+        return moved && playing(now) == playing(before)
     }
 }

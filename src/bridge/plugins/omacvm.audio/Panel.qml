@@ -124,6 +124,7 @@ Panel {
       // Another output has another balance, or none.
       if (root.opened && sound.available && root.output && root.output.uid !== sound.output) sound.refresh()
       root.refreshDisplayModels()
+      root.askForList()
     }
     function onBluetoothChanged() { root.refreshDisplayModels() }
   }
@@ -940,6 +941,7 @@ Panel {
   }
 
   component Spinner: Text {
+    id: spinner
     textFormat: Text.PlainText
     text: ""
     color: root.barFg
@@ -952,7 +954,7 @@ Panel {
       to: 360
       duration: Style.duration(900)
       loops: Animation.Infinite
-      running: parent.visible && Style.duration(900) > 0
+      running: root.opened && spinner.visible && Style.duration(900) > 0
     }
   }
 

@@ -155,8 +155,9 @@ final class NativeControlBridge: @unchecked Sendable {
     /// thread: Control Center takes a second or more.
     private func answerSound(_ r: Request) -> (Int, [String: Any]) {
         guard let app, app.bridgeOn() else { return (404, ["code": "not-found", "error": ExtraBrightnessGuest.error("not-found")]) }
-        let front = DispatchQueue.main.sync { MainActor.assumeIsolated { app.front() } }
-        return sound.answer(method: r.method, body: r.body, front: front)
+        return sound.answer(method: r.method, body: r.body) {
+            DispatchQueue.main.sync { MainActor.assumeIsolated { app.front() } }
+        }
     }
 
     /// A request the app answers itself (ExtraBrightnessGuest), on the main

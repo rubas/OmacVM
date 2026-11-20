@@ -19,7 +19,7 @@ const airplayDevice = { uid: "77331758-Audio", name: "AirPlay", transport: "airp
 const onDisplay = { output: display, devices: [display, mic, mini] }
 const onAirplay = { output: airplayDevice, devices: [airplayDevice, Object.assign({}, display, { default_output: false }), mic, mini] }
 const bluetooth = { devices: [{ name: "Dominic’s Apple Watch", paired: true, connected: false }, { name: "Headset", paired: true, connected: false }] }
-const listed = (selected, output) => ({ accessibility: true, output: output, devices: [
+const listed = (selected, output) => ({ accessibility: true, devicesOutput: output, devices: [
   { name: "Mac mini Speakers", selected: false }, { name: "Studio Display XDR Speakers", selected: selected === "display" },
   { name: "Living Room", selected: selected === "living" }] })
 const names = rows => rows.map(r => r.name + (r.active ? "*" : ""))
@@ -27,6 +27,8 @@ const names = rows => rows.map(r => r.name + (r.active ? "*" : ""))
 let l = M.outputLists(onDisplay, bluetooth, null)
 expect(same(names(l.outputs), ["Studio Display XDR Speakers*", "Mac mini Speakers"]) && l.airplay.length === 0 && l.airplayKnown,
   "before macOS's list is read: CoreAudio's outputs alone, no AirPlay row")
+expect(same(names(M.outputLists(onAirplay, bluetooth, null).outputs), ["AirPlay*", "Studio Display XDR Speakers", "Mac mini Speakers"]),
+  "on AirPlay with an app that has no list (an older one, no Accessibility): CoreAudio's AirPlay row stays, as before")
 
 l = M.outputLists(onDisplay, bluetooth, listed("display", display.uid))
 expect(same(names(l.outputs), ["Studio Display XDR Speakers*", "Mac mini Speakers"]), "the Mac's own outputs are listed once, from CoreAudio")
@@ -34,15 +36,15 @@ expect(same(names(l.airplay), ["Living Room"]) && l.airplay[0].picker && l.airpl
   "the HomePod, which CoreAudio does not know, is an AirPlay row, switched through macOS's list")
 
 l = M.outputLists(onAirplay, bluetooth, listed("living", airplayDevice.uid))
-expect(same(names(l.outputs), ["Studio Display XDR Speakers", "Mac mini Speakers"]), "on AirPlay: CoreAudio's AirPlay device is no row of its own")
+expect(same(names(l.outputs), ["Studio Display XDR Speakers", "Mac mini Speakers"]), "on AirPlay: the HomePod's row stands for CoreAudio's AirPlay device")
 expect(same(names(l.airplay), ["Living Room*"]) && l.airplayKnown, "on AirPlay: the HomePod has the checkmark")
 
 l = M.outputLists(onDisplay, bluetooth, listed("living", airplayDevice.uid))
 expect(same(names(l.airplay), ["Living Room"]) && l.airplayKnown, "back on the display's speakers: no AirPlay checkmark, without asking the Mac")
 
 l = M.outputLists(onAirplay, bluetooth, listed("living", "another-airplay-session-Audio"))
-expect(same(names(l.airplay), ["Living Room"]) && !l.airplayKnown,
-  "on AirPlay again since the list was read: no checkmark, and the panel has to ask which speakers play")
+expect(same(names(l.airplay), ["Living Room"]) && !l.airplayKnown && same(names(l.outputs), ["AirPlay*", "Studio Display XDR Speakers", "Mac mini Speakers"]),
+  "on AirPlay again since the list was read: no speaker's checkmark, CoreAudio's AirPlay row, and the panel has to ask which speakers play")
 expect(!M.outputLists(onAirplay, bluetooth, null).airplayKnown, "on AirPlay with no list yet: the panel has to ask")
 
 const withHeadset = listed("display", display.uid)

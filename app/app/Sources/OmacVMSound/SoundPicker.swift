@@ -63,7 +63,7 @@ public final class SoundPicker {
             var moved = false
             return try details.wait(limit: Self.connectLimit) { now in
                 let rows = SoundList.rows(now)
-                if rows != before { moved = true }
+                if SoundList.playing(rows) != SoundList.playing(before) { moved = true }
                 return SoundList.pressDone(name, before: before, now: rows, moved: moved)
             }
         }
@@ -76,7 +76,8 @@ public final class SoundPicker {
         }
         let app = AXUIElementCreateApplication(cc.processIdentifier)
         AXUIElementSetMessagingTimeout(app, 2)
-        guard AX.windows(app).isEmpty else { throw Failure.open }
+        guard let open = AX.windows(app) else { throw Failure.unsupported("Control Center does not answer") }
+        guard open.isEmpty else { throw Failure.open }
         guard let extra = Self.extra(app) else { throw Failure.unsupported("no Control Center in the menu bar") }
         let away = Self.offScreen()
         let start = ProcessInfo.processInfo.systemUptime
@@ -85,15 +86,16 @@ public final class SoundPicker {
         }
         // From here Control Center is open, or opening: it is closed on every way out.
         defer { Self.close(app, extra) }
-        guard let window = AX.wait(2, { AX.windows(app).first }) else { throw Failure.unsupported("Control Center did not open") }
+        guard let window = AX.wait(2, { AX.windows(app)?.first }) else { throw Failure.unsupported("Control Center did not open") }
         AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, away)
         guard let toggle = AX.wait(2, { AX.find(window, identifier: Self.soundToggle) }) else {
-            throw AX.windows(app).isEmpty ? Failure.interrupted : Failure.unsupported("no Sound module in Control Center")
+            throw AX.windows(app)?.isEmpty == true ? Failure.interrupted : Failure.unsupported("no Sound module in Control Center")
         }
         // The module's list is behind the one custom action of its button
-        // ("show details" in English).
-        guard let show = AX.actions(toggle).first(where: { $0.hasPrefix("Name:") }),
-              AXUIElementPerformAction(toggle, show as CFString) == .success else {
+        // ("show details" in English). With another number of them this is
+        // not the Control Center this code knows: nothing is performed.
+        let custom = AX.actions(toggle).filter { $0.hasPrefix("Name:") }
+        guard custom.count == 1, AXUIElementPerformAction(toggle, custom[0] as CFString) == .success else {
             throw Failure.unsupported("the Sound module has no list")
         }
         let elements = try work(Details(app: app, window: window))
@@ -129,15 +131,18 @@ public final class SoundPicker {
     }
 
     /// A press of the menu bar item goes one page back (the list, then the
-    /// modules), then closes Control Center.
+    /// modules), then closes Control Center. Done only once Control Center
+    /// says it has no window: no answer is not that, and is asked again.
     private static func close(_ app: AXUIElement, _ extra: AXUIElement) {
-        for _ in 0..<4 {
-            guard let window = AX.windows(app).first else { return }
+        for _ in 0..<6 {
+            guard let windows = AX.windows(app) else { usleep(300_000); continue }
+            guard let window = windows.first else { return }
             let list = AX.find(window, identifier: SoundList.title) != nil
             AXUIElementPerformAction(extra, kAXPressAction as CFString)
             _ = AX.wait(1.5) { () -> Bool? in
-                guard let w = AX.windows(app).first else { return true }
-                return (AX.find(w, identifier: SoundList.title) != nil) != list ? true : nil
+                guard let w = AX.windows(app) else { return nil }
+                guard let first = w.first else { return true }
+                return (AX.find(first, identifier: SoundList.title) != nil) != list ? true : nil
             }
         }
     }
@@ -149,7 +154,7 @@ public final class SoundPicker {
 
         private func scan() throws -> [(SoundElement, AXUIElement)] {
             // A click anywhere closes Control Center: its elements then answer nothing.
-            guard !AX.windows(app).isEmpty else { throw Failure.interrupted }
+            guard AX.windows(app)?.isEmpty == false else { throw Failure.interrupted }
             var out: [(SoundElement, AXUIElement)] = []
             AX.walk(window, 0) { e, depth in
                 out.append((SoundElement(depth: depth, role: AX.string(e, kAXRoleAttribute), subrole: AX.string(e, kAXSubroleAttribute),
@@ -161,18 +166,18 @@ public final class SoundPicker {
 
         func read() throws -> [SoundElement] { try scan().map(\.0) }
 
-        /// The list once it stands: two reads in a row agree, with a device in them.
+        /// The list once it stands: two reads in a row agree, with the
+        /// list's title and a device in them.
         func settled() throws -> [SoundElement] {
             let end = ProcessInfo.processInfo.systemUptime + 3
             var last: [SoundElement] = []
             while ProcessInfo.processInfo.systemUptime < end {
                 let now = try read()
-                if !SoundList.rows(now).isEmpty, now == last { return now }
+                if now.contains(where: { $0.identifier == SoundList.title }), !SoundList.rows(now).isEmpty, now == last { return now }
                 last = now
                 usleep(60_000)
             }
-            if SoundList.rows(last).isEmpty { throw Failure.unsupported("the Sound module shows no devices") }
-            return last
+            throw Failure.unsupported("the Sound module shows no list of devices that stands")
         }
 
         func wait(limit: Double, _ done: ([SoundElement]) -> Bool) throws -> [SoundElement] {
@@ -213,7 +218,15 @@ enum AX {
     }
 
     static func children(_ e: AXUIElement) -> [AXUIElement] { attr(e, kAXChildrenAttribute) as? [AXUIElement] ?? [] }
-    static func windows(_ app: AXUIElement) -> [AXUIElement] { attr(app, kAXWindowsAttribute) as? [AXUIElement] ?? [] }
+    /// Nil: the app did not answer, which says nothing about its windows.
+    static func windows(_ app: AXUIElement) -> [AXUIElement]? {
+        var v: CFTypeRef?
+        switch AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &v) {
+        case .success: return v as? [AXUIElement] ?? []
+        case .noValue: return []
+        default: return nil
+        }
+    }
 
     static func actions(_ e: AXUIElement) -> [String] {
         var names: CFArray?
@@ -227,10 +240,13 @@ enum AX {
         for c in children(e) { walk(c, depth + 1, visit) }
     }
 
-    static func find(_ root: AXUIElement, identifier: String) -> AXUIElement? {
-        var hit: AXUIElement?
-        walk(root, 0) { e, _ in if hit == nil, string(e, kAXIdentifierAttribute) == identifier { hit = e } }
-        return hit
+    static func find(_ root: AXUIElement, identifier: String, depth: Int = 0) -> AXUIElement? {
+        if string(root, kAXIdentifierAttribute) == identifier { return root }
+        guard depth < 24 else { return nil }
+        for c in children(root) {
+            if let hit = find(c, identifier: identifier, depth: depth + 1) { return hit }
+        }
+        return nil
     }
 
     /// The first answer within `limit` seconds, asked every 2 ms.
