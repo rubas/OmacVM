@@ -86,6 +86,13 @@ def test_sets_the_balance(vm):
     assert p.stdout.strip() == "Balance: 50"
 
 
+def test_opens_the_macs_settings(vm):
+    p, reqs = vm(lambda r: (200, dict(STATE, accessibility=False)), "allow", "--json")
+    assert p.returncode == 0, p.stderr
+    assert reqs[-1]["method"] == "POST" and reqs[-1]["body"] == {"allow": True}
+    assert json.loads(p.stdout)["accessibility"] is False
+
+
 def test_the_app_says_no(vm):
     for status, code in [(403, "accessibility"), (409, "busy"), (409, "not-front"), (409, "no-device"),
                          (409, "interrupted"), (409, "no-balance"), (501, "unsupported")]:

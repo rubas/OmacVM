@@ -6,14 +6,14 @@ in more words.
 ## Unreleased
 
 - **AirPlay and balance in the Audio panel.** The Audio panel in Omarchy's bar now lists the Mac's
-  AirPlay speakers and TVs in an AIRPLAY group under the outputs, so you can click to switch.
+  AirPlay speakers and TVs after the Mac's own outputs, so you can click to switch.
   When the Mac's current output supports it, such as
   headphones, the panel also shows a left/right Balance slider. AirPlay needs OmacVM allowed under
   Accessibility on the Mac (System Settings → Privacy & Security → Accessibility), the same
   permission Keyboard access already uses. Because macOS offers no other way, OmacVM opens Control
   Center out of sight for about a second to read the list or switch, and keys typed during that
-  second do not reach the VM. The panel therefore reads the AirPlay list only when it first opens
-  and when you press the refresh button next to AIRPLAY. It needs the app update and Update VM.
+  second do not reach the VM. The panel reads the AirPlay list each time it opens. It is also
+  calmer: no status line and no numbers beside the sliders. It needs the app update and Update VM.
 - **The Mac's own cursor as the VM's pointer** (hidden, off: `defaults write org.omacvm.app
   macPointer -bool true`). The setting has been in the app since 3.2 and did nothing, because
   Hyprland could not put its pointer on a virtual GPU's cursor plane. Now the VM builds Omarchy's

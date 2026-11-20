@@ -14,8 +14,8 @@ Omarchy's `omarchy.audio` (MIT, see `LICENSE`), driven by the Mac-side
   not the Bridge (`Sound.qml`, `omacvm sound`; ADR 0075): the app reads and
   presses the Sound list of the Mac's Control Center, which it opens off
   screen for about a second. Control Center has the Mac's keyboard for that
-  second, so the panel asks for the list only when it has none, and with the
-  button beside AIRPLAY.
+  second, so the panel asks for the list once when it opens and never on a
+  timer.
 
 ## Guest requirements
 

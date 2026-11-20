@@ -33,6 +33,17 @@ public final class SoundPicker {
 
     public static var trusted: Bool { AXIsProcessTrusted() }
 
+    /// Asks macOS, which then lists OmacVM under Accessibility (switched
+    /// off), and opens that list. Only the person turns it on.
+    public static func askAccess() {
+        DispatchQueue.main.async {
+            _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+    }
+
     static let controlCenter = "com.apple.controlcenter"
     /// macOS 26 and later keep the menu bar's extras in this process.
     static let menuBarAgent = "com.apple.MenuBarAgent"
