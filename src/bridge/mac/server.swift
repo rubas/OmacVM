@@ -300,6 +300,35 @@ func dismissNotifications() throws -> (found: Int, closed: Int) {
   return r
 }
 
+/// GET and POST /logo (feature logo-light, logo.swift): the mode the lit Apple
+/// logo on the lid plays, or a new one from a VM. The VM only names a mode
+/// (LogoMode.parse checks it); the Mac plays it. A mode belongs to the VM
+/// behind the connection (VMProcess) until that VM stops or another sets one.
+func logoRequest(_ fd: Int32, peer: String, method: String, body: Data) {
+  guard let logo = logoLight else { return respond(fd, 409, ["error": "this Mac has no lit Apple logo", "code": "no-logo"]) }
+  let off: [String: Any] = ["error": "the logo light is off on this Mac (logo_light in the Bridge's config.json): omacvm enable logo-light",
+                            "code": "off"]
+  switch method {
+  case "GET":
+    respond(fd, logo.enabled ? 200 : 409, logo.enabled ? logo.mode.json : off)
+  case "POST":
+    let mode: LogoMode
+    switch LogoMode.parse(body) {
+    case .success(let m): mode = m
+    case .failure(let e): return respond(fd, e.status, ["error": e.message, "code": e.code])
+    }
+    guard let vm = VMProcess.of(fd, isVM: { VMApp.of(pid: $0) != nil }, arguments: VMKeys.arguments) else {
+      logRefusal("logo \(peer)", "/logo from \(peer): refused, not from a VM that runs in OmacVM.app here")
+      return respond(fd, 403, ["error": "only a VM that runs in OmacVM.app on this Mac sets the logo", "code": "not-a-vm"])
+    }
+    guard logo.set(mode, owner: vm) else { return respond(fd, 409, off) }
+    log("/logo from \(peer) (VM pid \(vm)): \(mode.words)")
+    respond(fd, 200, mode.json)
+  default:
+    respond(fd, 405, ["error": "method not allowed"])
+  }
+}
+
 /// GET or POST /display/external-brightness: the Mac display the VM (output)
 /// is on. Everything from the VM is checked: a box (x, y, width, height: an
 /// OmacVM.app output from its layout) only picks among the displays that show
@@ -508,6 +537,8 @@ func handle(_ fd: Int32, peer: String) {
     } catch {
       respond(fd, 500, ["error": "\(error)"])
     }
+  case (_, "/logo"):
+    logoRequest(fd, peer: peer, method: method, body: Data(body))
   case ("POST", "/power"), ("POST", "/join"), ("POST", "/disconnect"):
     respond(fd, 501, ["error": "Wi-Fi control is not implemented yet (stage 2)"])
   case (_, "/state"), (_, "/scan"), (_, "/audio"), (_, "/display"), (_, "/bluetooth"), (_, "/timezone"), (_, "/wifi/password"), (_, "/events"),
