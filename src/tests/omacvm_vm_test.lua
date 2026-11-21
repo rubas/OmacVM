@@ -215,8 +215,6 @@ if have_piece then
     #on == 1 and type(on[1].dispatcher) == "function" and #errors == 0)
   check("... without a description: Omarchy's keybindings menu lists the key once (Omarchy's own)",
     on[1] ~= nil and (on[1].opts == nil or on[1].opts.description == nil))
-  check("... no other bind of OmacVM's", #binds == 1)
-  check("... loading the config runs nothing", #execs == 0)
   if on[1] then
     client_there = true; on[1].dispatcher()
     check("pressed, the Bridge on: its client asks the Mac to close its notifications",

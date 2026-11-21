@@ -154,6 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The control centre's Mac jobs run this app's omacvm when there is no checkout.
         ControlCLI.refresh()
         state.startVM = { [weak self] in self?.startVM() }
+        state.startVMUnasked = { [weak self] in self?.startVM(personAsked: false) }
         state.checkForUpdates = { [weak self] in self?.checkForUpdates(nil) }
         state.showVM = { Self.qemuApp?.activate() }
         state.powerDownVM = { [weak self] in self?.runner?.powerDown() }
@@ -188,6 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // Update with a VM restart (Updater.swift): the launcher's VM and its controls.
         let u = Updater.shared
+        u.qemuPID = { Self.qemuApp?.processIdentifier }
         u.runningVM = { [weak self] in
             guard let r = self?.runner, r.isRunning else { return nil }
             return (r.config.folder, r.config.name)
@@ -247,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let c = VMConfig.load(from: folder), c.isReady {
             state.config = c
             state.screen = .ready
-            startVM()
+            startVM(personAsked: false)
         } else if let drive = Storage.missingDrive(for: folder) {
             state.message = Storage.driveGoneText(drive)
             showWindow()
@@ -475,7 +477,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// after it: meanwhile a build, a move or another start may have begun.
     enum NetworkStart { case ask, helpersChecked, decided(String?) }
 
-    private func startVM(openGLOnce: String? = nil, network: NetworkStart = .ask) {
+    /// `personAsked`: the person asked for this start just now, so its
+    /// questions always take the keys. False for a start that comes by itself
+    /// (AskKeys): after an update, after Update VM, for a disk cut.
+    private func startVM(openGLOnce: String? = nil, network: NetworkStart = .ask, personAsked: Bool = true) {
         // A build or an update runs the VM without a window: a second QEMU on
         // its disk (a start from the Dock or `omacvm start`) would corrupt it.
         if state.screen == .building {
@@ -524,14 +529,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Not shut down cleanly, or copied while it ran (RunMarker): asked
         // first, once per start (.decided: the same start, continued).
         if case .ask = network {
-            guard RunMarker.confirmStart(state.config) else {
+            guard RunMarker.confirmStart(state.config, personAsked: personAsked) else {
                 showWindow()
                 return
             }
             // This Mac's helpers for the VM (a VM copied from another Mac):
             // said once per start, Update VM offered.
-            askMacHelpers { [weak self] go in
-                if go { self?.startVM(openGLOnce: openGLOnce, network: .helpersChecked) }
+            askMacHelpers(personAsked: personAsked) { [weak self] go in
+                if go { self?.startVM(openGLOnce: openGLOnce, network: .helpersChecked, personAsked: personAsked) }
             }
             return
         }
@@ -539,7 +544,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // update): asked first, never a start that cannot work.
         guard case .decided(let userNetwork) = network else {
             if FastNetwork.isOn(state.config) {
-                askFastNetwork { [weak self] why in self?.startVM(openGLOnce: openGLOnce, network: .decided(why)) }
+                askFastNetwork(personAsked: personAsked) { [weak self] why in self?.startVM(openGLOnce: openGLOnce, network: .decided(why)) }
             } else {
                 startVM(openGLOnce: openGLOnce, network: .decided(nil))
             }
@@ -601,7 +606,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The guest shrank btrfs and shut down for the cut: start again
             // (startVM cuts first, then the guest checks the disk).
             if !self.quitting, VMDisk.resize(self.state.config)?.step == .cut {
-                self.startVM()
+                self.startVM(personAsked: false)
                 return
             }
             if self.quitting {
@@ -660,7 +665,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// QEMU's user network this time and says so. `done` gets why the start
     /// takes the user network, nil when the service is fine.
     private var askingFastNetwork = false
-    private func askFastNetwork(_ done: @escaping (String?) -> Void) {
+    private func askFastNetwork(personAsked: Bool, _ done: @escaping (String?) -> Void) {
         guard !askingFastNetwork else { return }   // a second start while asking: the first one starts
         askingFastNetwork = true
         let finish: (String?) -> Void = { [weak self] why in
@@ -689,7 +694,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         + "Or start on the normal network (QEMU's own) this time; the fast network stays on for the next starts."
                     a.addButton(withTitle: need.button)
                     a.addButton(withTitle: "Start on Normal Network")
-                    NSApp.activate()
+                    AskKeys.take(a.window, personAsked: personAsked)
+                    // Comes after a look at the service, and Return updates it.
+                    AskKeys.hold(a)
                     update = a.runModal() == .alertFirstButtonReturn
                 }
                 guard update else { finish(FastNetwork.notUpdated("you chose the normal network for this start")); return }
@@ -702,7 +709,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             b.messageText = "The fast network was not updated"
                             b.informativeText = "\(err)\n\nThe VM starts on the normal network (QEMU's own) this time."
                             b.addButton(withTitle: "Start")
-                            NSApp.activate()
+                            AskKeys.take(b.window, personAsked: personAsked)
                             b.runModal()
                         }
                         finish(FastNetwork.notUpdated(err))
@@ -725,7 +732,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var askingHelpers = false
     /// For qemu.log ("OmacVM: Mac helpers: ..."): what the look said and what was asked.
     private var helpersNote: String?
-    private func askMacHelpers(_ done: @escaping (Bool) -> Void) {
+    private func askMacHelpers(personAsked: Bool, _ done: @escaping (Bool) -> Void) {
         askingHelpers = true
         helpersNote = nil
         let c = state.config
@@ -790,7 +797,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     } else if hidden {
                         go("no (no window to ask in)"); return
                     } else {
-                        answer = s.ask(vm: c.name)
+                        answer = s.ask(vm: c.name, personAsked: personAsked)
                         if overtaken() { return }
                     }
                     if answer == .later {
@@ -819,7 +826,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.messageText = Graphics.didNotStartOnMac
             alert.informativeText = text
             alert.addButton(withTitle: "OK")
-            NSApp.activate()
+            AskKeys.take(alert.window, overVM: Self.qemuApp?.processIdentifier)
             alert.runModal()
             Self.qemuApp?.activate()
         }
@@ -1050,6 +1057,12 @@ if CommandLine.arguments.dropFirst().first == "--sound" {
 // `OmacVM --settings-dump`: the VM window's settings as JSON (SettingsDump.swift).
 if CommandLine.arguments.dropFirst().first == SettingsDump.flag {
     MainActor.assumeIsolated { SettingsDump.main() }
+}
+
+// `OmacVM --battery-saver on|off|status --vm NAME`: the Battery saver group's
+// top switch without a window (BatterySaverGroup.swift), for the e2e rows.
+if CommandLine.arguments.dropFirst().first == BatterySaverCLI.flag {
+    MainActor.assumeIsolated { BatterySaverCLI.main(Array(CommandLine.arguments.dropFirst(2))) }
 }
 
 MainActor.assumeIsolated {

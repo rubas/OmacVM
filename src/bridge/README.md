@@ -245,24 +245,21 @@ omacvm-bridge-events`.
 ### Notifications
 
 `POST /notifications/dismiss` closes the Mac's banners and alerts on screen,
-as their own close button does, and answers `{"closed": N}`. Only while an
-OmacVM.app VM is in front (`409` otherwise): in full screen macOS shows them
-over the VM, where nothing in it reaches them. Omarchy's own "Dismiss all notifications" (Super+Shift+comma)
-asks for it: `../guest/omacvm_vm.lua` adds a second bind on those keys, which
-runs `omacvm-bridge notifications dismiss` while the Bridge's client is there.
-Hyprland runs every bind of a key, so Omarchy's still dismisses the VM's own.
+as their own close button does, and answers `{"closed": N}`; only while an
+OmacVM.app VM is in front (`409` otherwise), where they cover the VM and
+nothing in it reaches them. Omarchy's "Dismiss all notifications"
+(Super+Shift+comma) asks for it: `../guest/omacvm_vm.lua` adds a second bind
+on those keys (Hyprland runs every bind of a key, so Omarchy's still clears
+the VM's own) that runs `omacvm-bridge notifications dismiss`.
 
-`notifications.swift` walks NotificationCenter's Accessibility tree (the
-Bridge's Accessibility permission, `403` without it) and closes each element
-with the subrole `AXNotificationCenterBanner` or `AXNotificationCenterAlert`
-by its Close action. macOS names that action in NotificationCenter's language
-(`Name:Close`, `Name:Schließen`), so the Bridge reads the word from
-NotificationCenter's own bundle in the Mac's languages (macOS 15.4 and newer;
-before, only `Close`). Which elements, and by which action:
-`notifications-model.swift`, tested by `mac/test-models.sh`;
-`mac/test-notifications.sh` puts up a test banner and closes what is on this
-Mac's screen through the Bridge's code (in the session at the screen, from a
-terminal with Accessibility).
+`notifications.swift` closes each element of NotificationCenter's
+Accessibility tree with the subrole `AXNotificationCenterBanner` or
+`AXNotificationCenterAlert` by its Close action. macOS titles that action in
+NotificationCenter's language (`Name:Close`, `Name:Schließen`) and gives it no
+other name, so the Bridge reads the word from NotificationCenter's own bundle
+in the Mac's languages (macOS 15.4 and newer; before, only `Close`). Which
+elements, which action: `notifications-model.swift`, tested by
+`mac/test-models.sh`.
 
 ### The retired routes' addresses
 
