@@ -5,6 +5,12 @@ in more words.
 
 ## Unreleased
 
+- **Keyboard access: OmacVM is in the list by itself.** Allow… asked macOS with a request that no
+  list of Privacy & Security shows (macOS 27.2: OmacVM was in no list, and had to be added with +).
+  OmacVM now asks with Accessibility's own request, so macOS lists OmacVM under Accessibility
+  ("Device Control and Data Access" on macOS 27.2), switched off, and you only turn it on. It asks at
+  each start of a VM too while macOS refuses the VM's key tap; the dialog holds no start. A grant
+  that works is kept as before, and a further click on Allow… changes nothing.
 - **The Mac's own cursor as the VM's pointer** (hidden, off: `defaults write org.omacvm.app
   macPointer -bool true`). The setting has been in the app since 3.2 and did nothing, because
   Hyprland could not put its pointer on a virtual GPU's cursor plane. Now the VM builds Omarchy's

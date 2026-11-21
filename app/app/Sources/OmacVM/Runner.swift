@@ -709,6 +709,7 @@ final class Runner {
             log.write(Data("OmacVM: no microphone permission yet: the VM records nothing until its next start\n".utf8))
         }
         log.write(Data("OmacVM: \(KeyAccess.record)\n".utf8))
+        KeyAccess.askAtStart(allowed: KeyAccess.allowed, ask: KeyAccess.ask)
         log.write(Data("OmacVM: \(DockIdentity.record(launch: launch, qemu: Paths.qemu.path))\n".utf8))
         // HDR for omacvm check: on, or why not while the switch is on.
         if hdr.on || Settings.hdr {
