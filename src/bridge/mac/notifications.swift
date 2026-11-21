@@ -8,6 +8,14 @@ import ApplicationServices
 struct AXNotificationElement: NotificationElement {
   let ref: AXUIElement
 
+  /// A NotificationCenter that stops answering holds each call for 1 s, not
+  /// the system's default of about 6 s. macOS keeps a timeout per element, so
+  /// the application element and each element read from it get their own.
+  init(ref: AXUIElement) {
+    self.ref = ref
+    AXUIElementSetMessagingTimeout(ref, 1)
+  }
+
   var subrole: String? { value(kAXSubroleAttribute) as? String }
   var actions: [String] {
     var names: CFArray?
@@ -39,7 +47,8 @@ extension MacNotifications {
       localizations: Locale.preferredLanguages.map(Locale.Language.init(identifier:))) ?? "Close"
   }
 
-  /// The banners and alerts on this Mac user's screen, each with its Close action.
+  /// The banners and alerts on this Mac user's screen, each with its Close
+  /// action (also for test-notifications.sh). Without Accessibility: none.
   static func onScreen() -> [(element: AXNotificationElement, action: String)] {
     let windows = NSRunningApplication.runningApplications(withBundleIdentifier: notificationCenter).flatMap {
       AXNotificationElement(ref: AXUIElementCreateApplication($0.processIdentifier)).windows
@@ -48,9 +57,8 @@ extension MacNotifications {
   }
 
   /// Closes every banner and alert on this Mac user's screen: how many were
-  /// there, and how many closed. nil: no Accessibility permission.
-  static func closeOnScreen() -> (found: Int, closed: Int)? {
-    guard AXIsProcessTrusted() else { return nil }
+  /// there, and how many closed. Without Accessibility it finds none.
+  static func closeOnScreen() -> (found: Int, closed: Int) {
     let found = onScreen()
     let closed = found.filter { AXUIElementPerformAction($0.element.ref, $0.action as CFString) == .success }
     return (found.count, closed.count)

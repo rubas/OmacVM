@@ -145,6 +145,14 @@ reviews, measuring pitfalls, how the VM apps work inside) are in
   OmacVM.app with **Keep the Dock and hot corners away** on (the default)
   hides it anyway; with that setting off, **Full screen including notch**
   starts as normal full screen. `omacvm check` points this out.
+- **A top hot corner fires over the strip beside the notch** (OmacVM.app,
+  full screen with the notch via Omanotch): the strip is the Mac's menu-bar
+  area, not the VM's. While the pointer is there it is the Mac's (Omanotch
+  shows it with the VM's arrow) and the VM's own pointer waits behind the
+  camera until you move back down. **Keep the Dock and hot corners away**
+  covers the VM's screen below the strip, not the strip's two top corners:
+  a hot corner set at the top left or top right (System Settings › Desktop &
+  Dock › Hot Corners) can still fire there.
 - **The strip beside the notch stays black after you open the lid**
   (OmacVM.app, **Full screen including notch**, the VM started with the lid
   closed and only an external display on): leave full screen and enter it
@@ -226,7 +234,12 @@ reviews, measuring pitfalls, how the VM apps work inside) are in
 - **Brightness keys do nothing with the VM in front**: OmacVM Bridge reads
   them from the keyboard and needs Input Monitoring (System Settings › Privacy
   & Security › Input Monitoring › OmacVM Bridge). Its log says
-  "brightness keys: reading them from the keyboard" when it can.
+  "brightness keys: reading them from the keyboard" when it can. "cannot
+  read the keyboard (IOHIDManagerOpen: 0xe00002c5)" means another app holds
+  a keyboard for itself (Karabiner-Elements does with its own rules); the
+  Bridge tries again after 2 s, then waits twice as long each time, up to
+  5 minutes (before 3.5.0 it tried every 2 s, and each try kept about
+  0.4 MB, #813).
 - **A mouse scrolls on after the wheel stops, or jumps**: scroll momentum is
   for trackpads only and passes every mouse's scrolling one to one; this was
   a smooth-scrolling mouse (Logitech MX and co.) taken as a trackpad before
@@ -583,6 +596,13 @@ were about Parallels, UTM and VMware Fusion, retired in 3.4.0; they are in
   mixer on their own real-time thread". What is left in every path: a Mac
   so busy that the VM's own threads get no time (a build on every core:
   the guest stopped for up to 150 ms) breaks the guest's streams. ADR 0045.
+- **3.5.0:** the own thread ticks with the stream (5.3 ms with PipeWire's
+  usual buffers, down to 1 ms where a guest app or the Mac's output needs
+  it) instead of every 1 ms: about 190 wakeups a second instead of 1000,
+  the same delay. qemu.log says `sound: audio tick every <N> us`. To rule
+  it out, switch the own thread off as above; for developers,
+  `OMACVM_AUDIO_THREAD_PERIOD_US=1000` in the app's environment brings back
+  the fixed 1 ms tick. ADR 0045.
 - **For 2.9.0 and 2.9.1:** a bigger safety buffer in the VM. As root in
   the VM (USER = your user):
 
@@ -600,6 +620,7 @@ were about Parallels, UTM and VMware Fusion, retired in 3.4.0; they are in
 - **Where:** `app/runtime/patches/qemu-darwin-main-loop-qos.patch`,
   `app/runtime/patches/qemu-hda-no-catch-up.patch`,
   `app/runtime/patches/qemu-audio-own-thread.patch` (3.1.16, `audioThread`;
+  its tick: `qemu-audio-tick-follows-stream.patch`, 3.5.0;
   `AudioPath.swift`, `AudioDelay.qemuThreadMs`),
   `app/app/Sources/OmacVM/Runner.swift` (`audioClassic`), `src/cmd/check.sh`,
   the measurement tools in `app/runtime/Tests/audio/`, ADR 0036 and 0045; in the
@@ -775,6 +796,11 @@ were about Parallels, UTM and VMware Fusion, retired in 3.4.0; they are in
   is never napped. QEMU's log says "OmacVM: App Nap: off while the VM runs".
   `OMACVM_APP_NAP=1` in QEMU's environment allows App Nap again (tests).
   Before: keep the VM's window visible while a job runs.
+- **macOS 27:** With only the `NSProcessInfo` activity, macOS 27 still
+  clamped a hidden idle VM to Utility QoS (priority 20, tier 3 timers,
+  Utility disk I/O) after about 30 s. QEMU now also registers
+  `NSAppSleepDisabled` before `main()` unless `OMACVM_APP_NAP=1`, and
+  `src/tests/app-nap.sh --live PID` checks that vCPUs stay at priority 31+.
 - **Where:** `app/runtime/patches/omacvm-cocoa-no-app-nap.patch`; test
   `src/tests/app-nap.sh` (`--live PID` checks a running VM's vCPU threads).
 
@@ -1145,7 +1171,7 @@ were about Parallels, UTM and VMware Fusion, retired in 3.4.0; they are in
   On screen they look right; apps that draw SDR (imv, a terminal) come out
   exact. Omarchy's screen recordings come out grey and flat for every app.
 - **Cause:** those apps draw in HDR (PQ) with SDR white at 203 nits
-  (BT.2408). Hyprland 0.56.2 and 0.57.0 write the SDR copy every capture reads with
+  (BT.2408). Hyprland 0.56.2 and 0.57.x write the SDR copy every capture reads with
   SDR white at 80 nits for HDR windows (`cm_helpers.glsl`, a TODO upstream),
   so every colour is 2.54 times too bright in linear light and the light
   ones clip; a window shared alone is clamped at 80 nits the same way. SDR
@@ -1159,12 +1185,12 @@ were about Parallels, UTM and VMware Fusion, retired in 3.4.0; they are in
   the share's white before Hyprland's clamp. A running desktop takes it at
   once. Captures are SDR, so parts brighter than white (HDR video
   highlights) are cut off in them. One file per Hyprland release (0.56.2,
-  0.57.0), each only for the Hyprland it was made for (checked byte for byte
+  0.57.0, 0.57.2), each only for the Hyprland it was made for (checked byte for byte
   at each Hyprland update; a Hyprland update puts in the new release's file):
   with another one `omacvm check`'s "HDR captures" line says there is no
   OmacVM fix for it, names the installed version and the releases OmacVM has
   fixes for (e.g. "no OmacVM fix for Hyprland 0.58.0-1 yet (OmacVM has fixes
-  for 0.56.2 and 0.57.0)"), and Hyprland's own copy is used. After a Hyprland
+  for 0.56.2, 0.57.0 and 0.57.2)"), and Hyprland's own copy is used. After a Hyprland
   update, log out and in before running `hyprctl reloadshaders` yourself: the
   Hyprland still running from before would read the new release's file.
   Back to Hyprland's own copy until the
@@ -2043,3 +2069,68 @@ were about Parallels, UTM and VMware Fusion, retired in 3.4.0; they are in
 - **Where:** `src/disk/guest/install.sh`,
   `src/disk/guest/61-omacvm-io-scheduler.rules`, `src/guest/check.sh` ("disk
   scheduler"); test `src/tests/disk-scheduler.sh`.
+
+## 65. x86 apps: the VM ran out of memory building box64
+
+- **Symptom:** switching x86 Linux apps on fails after a minute or two:
+  "x86 apps: the build failed (details in /var/log/omacvm-x86-apps.log)",
+  and the log has `cc: fatal error: Killed signal terminated program cc1`
+  (the kernel log: `Out of memory: Killed process ... (cc1)`). The switch
+  goes back to off. Small VMs: 3 GB test VMs failed every time; a 4 GB VM
+  (the smallest OmacVM makes, the default on 8 GB Macs) got through with an
+  idle desktop but only 0.6 GB to spare, so with apps open it fails too.
+  Up to 3.4.6.
+- **Cause:** one file of box64, `src/tools/gtkclass.c`, needs about 4.1 GB
+  to compile with debug info (`-g`, from CMake's RelWithDebInfo), which
+  OmacVM's package strips again anyway. Since 3.4.2 zram is capped at a
+  quarter of the memory on Omarchy 4.5 too (60), so a small VM with the
+  desktop open no longer gets through by swapping, and the kernel kills the
+  compiler. One build job fails as well; the job count is not the cause. A
+  new VM built with x86 apps on often got through: the zram cap applies
+  only after its first restart.
+- **Fix (3.4.7):** Update VM (`omacvm apply`), then switch x86 apps on again.
+  box64 now builds without `-g` and with GCC freeing its memory sooner:
+  that file needs about 1.24 GB, and the whole switch passes in a 3 GB VM
+  with the desktop open (145-233 s on a Mac mini M4, at least 900 MB
+  left free). The package is
+  the same box64 (same version), so a VM that has it keeps it and Update VM
+  builds nothing.
+- **Still too little:** with less than 1.5 GB free in the VM (free memory
+  plus free swap, for example while a big app runs), switching it on now
+  stops at once, before anything is installed: "box64's build needs about
+  1.5 GB of free memory in the VM, and only 1.2 GB is free: close apps in
+  the VM or give it more memory". If the compiler is killed anyway, the
+  reason says "the VM ran out of memory building box64 (it has N GB of
+  memory)". `omacvm apply`, `omacvm enable x86-apps` and the control centre
+  show these lines; then switch x86 apps on again.
+- **Before 3.4.7:** close apps in the VM, or give it more memory for the
+  switch (`omacvm resources --vm NAME --memory-gb 6`, restart, switch it on,
+  then back).
+- **Where:** `src/x86/guest/PKGBUILD` (`build()`), `src/x86/guest/install.sh`
+  (`mem_ok`, `build_failed`); test `src/tests/x86-apps.sh`;
+  [ADR 0040](adr/0040-x86-apps-box64.md) (amendment 3.4.7).
+
+## 66. app: YouTube makes the Mac work harder than other videos (Ambient mode)
+
+- **Symptom:** a YouTube video in the VM's browser keeps the Mac busier
+  (warmer, shorter on battery) than a video of the same size from a file or
+  another site. Activity Monitor shows more GPU time for the VM.
+- **Cause:** YouTube's Ambient mode, on by default: a soft glow in the
+  video's colours behind the player, in full screen in the black bars above
+  and below the video. To draw it the page runs an animation 120 times a
+  second and repaints the whole browser window about 15 times a second, on
+  top of the video's own frames. In the VM each of those frames goes the
+  whole way to the Mac's screen. Measured in a test VM on a Mac mini M4
+  (Google Chrome, YouTube's 1080p60 AV1 stream, full screen, two runs each):
+  with Ambient mode 69 frames per second reach the Mac instead of 60, and
+  the VM's GPU time on the Mac goes up by about half (276 against 180 ms
+  per second). On a MacBook Air M2 (60 Hz, VM in full screen, live YouTube,
+  so a rough figure) the whole Mac drew about 0.9 W less with Ambient mode
+  off. Chrome on macOS draws the glow too, at a lower cost.
+- **What you can do:** Ambient mode is YouTube's own look, so OmacVM leaves
+  it as it is. To turn it off: the gear in the player, then Ambient mode.
+  The browser keeps the choice for later videos. The bars around a full
+  screen video are then black.
+- **Not the cause:** the YouTube page itself (a paused video costs about
+  as much as an idle VM), comments, recommendations, the network or the
+  sound.

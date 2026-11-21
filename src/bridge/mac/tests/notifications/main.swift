@@ -19,7 +19,8 @@ case "shows" where args.count == 2:
   }
   exit(says ? 0 : 1)
 case "close":
-  guard let r = MacNotifications.closeOnScreen() else { print("no Accessibility permission"); exit(1) }
+  guard AXIsProcessTrusted() else { print("no Accessibility permission"); exit(1) }
+  let r = MacNotifications.closeOnScreen()
   print("{\"found\": \(r.found), \"closed\": \(r.closed)}")
 default:
   print("usage: notifications-live count | shows TEXT | close"); exit(2)

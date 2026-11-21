@@ -4,15 +4,17 @@
 # run them: they ask between rows, not only at the start, wait while someone
 # is there and go on once the Mac is quiet again. Source it (bash 3.2).
 #
-# Someone is there when:
-#   - a remote session is open: macOS Screen Sharing (screensharingd's "Remote
-#     user is connected", screensharingd or ScreensharingAgent running, an
-#     established connection on port 5900, which Apple Remote Desktop uses too)
-#     or Jump Desktop (its rtcproxy / desktopproxy). Also a session left alone:
-#     a remote viewer may be watching the screen without touching it.
-#   - HID input that was not ours came in the last PERSON_IDLE_MIN seconds
-#     (default 60). Our own events (CGEventPostToPid, HID moves and clicks)
-#     reset HIDIdleTime too, so a harness stamps them with person_posted.
+# Someone is there when HID input that was not ours came in the last
+# PERSON_IDLE_MIN seconds (default 60). Our own events (CGEventPostToPid, HID
+# moves and clicks) reset HIDIdleTime too, so a harness stamps them with
+# person_posted. A remote session (macOS Screen Sharing: screensharingd's
+# "Remote user is connected", screensharingd or ScreensharingAgent running, an
+# established connection on port 5900, which Apple Remote Desktop uses too; or
+# Jump Desktop: its rtcproxy / desktopproxy) is named in the reason and logged,
+# but one with no input is the owner connected from elsewhere, not someone at
+# the Mac: it does not hold the rows (the owner, 2026-10-27: "don't pause on the
+# open jump session, that's me remote"; until 3.4.5 it held them, and the
+# 3.4.5 release test's cc-switches row waited all day on one).
 # person_watch_start samples in the background (every PERSON_TICK s, default 2)
 # and writes each foreign input and each change of the remote sessions with its
 # time to $PERSON_DIR/watch.log, so a visit between two rows is seen as well.
@@ -27,8 +29,12 @@
 #                             own input until (epoch s, 0 never), FOREIGN = the
 #                             watcher's last foreign input (epoch s, 0 none)
 #   person_check              the verdict now
-#   person_locked             exit 0 while the session is locked (the console's screen lock in
-#                             the IORegistry); present-locked.sh runs only then
+#   person_locked             exit 0 while the session is locked: the lock flag in the
+#                             IORegistry, and still set after a display wake (a
+#                             sleeping display sets the flag too); present-locked.sh
+#                             runs only then
+#   person_lock_flag          exit 0 while the flag is set, no wake (for loops that poll:
+#                             no flag always means unlocked)
 #   person_watch_start, person_watch_stop
 #   person_gate ROW           between two rows: what the watcher saw since the last
 #                             gate goes to person_overlap (a hook, if the harness
@@ -44,6 +50,9 @@ PERSON_POLL=${PERSON_POLL:-10}
 PERSON_TICK=${PERSON_TICK:-2}
 # Shared with onscreen.sh's runs before (its LASTF): our last own input, epoch s.
 PERSON_OWN=${PERSON_OWN:-$HOME/Library/Caches/omacvm-e2e-last-input}
+# person_locked: when a lock was last seen after a display wake (epoch s).
+PERSON_LOCKSEEN=${PERSON_LOCKSEEN:-$HOME/Library/Caches/omacvm-e2e-lock-seen}
+PERSON_REWAKE=${PERSON_REWAKE:-300}
 PERSON_WHY=""
 
 # The sources (tests replace these functions with made-up ones).
@@ -61,6 +70,8 @@ _person_tcp() { nettop -m tcp -l 1 -L 1 -n 2>/dev/null; }
 _person_idle_raw() { ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/ {print int($NF / 1000000000); exit}'; }
 _person_now() { date +%s; }
 _person_lock_raw() { ioreg -n Root -d1 -k IOConsoleUsers 2>/dev/null; }
+# Lights the display like a key press would, without an input event: no password, no unlock.
+_person_wake() { caffeinate -u -t 2; sleep 3; }
 
 person_remote() {
   local r="" a ps
@@ -82,7 +93,23 @@ person_remote() {
 person_hid_idle() { local i; i=$(_person_idle_raw); echo "${i:-0}"; }
 
 # No `ioreg | grep -q`: grep ends ioreg early, and under pipefail its SIGPIPE always made it No.
-person_locked() { [[ $(_person_lock_raw) == *'"CGSSessionScreenIsLocked"=Yes'* ]]; }
+person_lock_flag() { [[ $(_person_lock_raw) == *'"CGSSessionScreenIsLocked"=Yes'* ]]; }
+# The flag alone is no lock screen: macOS sets it while the display sleeps or the screen
+# saver runs, also with "Require password" off (a test Mac read Yes for a day and was
+# never locked). So wake the display and look again; only a flag that stays is a lock.
+# A lock seen that way is not woken again for PERSON_REWAKE s while the flag stays, so a
+# harness that waits on it does not light the lock screen every few seconds.
+person_locked() {
+  local s
+  person_lock_flag || { rm -f "$PERSON_LOCKSEEN" 2>/dev/null; return 1; }
+  s=$(cat "$PERSON_LOCKSEEN" 2>/dev/null)
+  [[ $s =~ ^[0-9]+$ ]] && (( $(_person_now) - s < PERSON_REWAKE )) && return 0
+  _person_wake
+  person_lock_flag || return 1
+  mkdir -p "$(dirname "$PERSON_LOCKSEEN")" 2>/dev/null
+  _person_now > "$PERSON_LOCKSEEN" 2>/dev/null
+  return 0
+}
 
 person_posted() {   # [SECONDS]: our input from now until SECONDS from now
   local until=$(( $(_person_now) + ${1:-2} )) old
@@ -97,15 +124,14 @@ _person_own() { local o; o=$(cat "$PERSON_OWN" 2>/dev/null); [[ $o =~ ^[0-9]+$ ]
 person_verdict() {   # IDLE REMOTE OWN FOREIGN NOW
   local idle=$1 remote=$2 own=$3 foreign=$4 now=$5 last
   [[ ${OMACVM_E2E_IGNORE_IDLE:-0} == 1 ]] && return 0
-  [[ -n $remote ]] && { echo "remote session: $remote"; return 0; }
   # The watcher saw input that was not ours not long ago (it may have been
   # followed by ours, which hides it from HIDIdleTime).
-  (( foreign > 0 && now - foreign < PERSON_IDLE_MIN )) && { echo "input at $(_person_hm "$foreign"), not ours"; return 0; }
+  (( foreign > 0 && now - foreign < PERSON_IDLE_MIN )) && { echo "input at $(_person_hm "$foreign"), not ours${remote:+ (remote session: $remote)}"; return 0; }
   (( idle >= PERSON_IDLE_MIN )) && return 0
   last=$(( now - idle ))
   # The last input was ours (2 s slack: whole seconds on both sides).
   (( own > 0 && last <= own + 2 )) && return 0
-  echo "input ${idle} s ago, not ours"
+  echo "input ${idle} s ago, not ours${remote:+ (remote session: $remote)}"
 }
 _person_hm() { date -r "$1" +%H:%M:%S 2>/dev/null || echo "$1"; }
 
@@ -177,8 +203,8 @@ _person_new() {
   tail -c +$(( seen + 1 )) "$PERSON_DIR/watch.log" | head -c $(( size - seen ))
   echo "$size" > "$PERSON_DIR/seen"
 }
-# What counts: a foreign input, or a remote session that is not "none".
-_person_events() { awk -F'\t' '$2 == "input" || ($2 == "remote" && $3 != "none") { printf "%s%s", (n++ ? "; " : ""), $3 }'; }
+# What counts: a foreign input (a remote session alone does not; it is in the log).
+_person_events() { awk -F'\t' '$2 == "input" { printf "%s%s", (n++ ? "; " : ""), $3 }'; }
 
 person_gate() {   # ROW: the row about to run
   local row=${1:-next} ev why t0 now

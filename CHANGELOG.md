@@ -21,11 +21,192 @@ in more words.
   options, and dims any unavailable option inside a shown group. Click to switch, or pick with h and
   l and press Enter. This uses the same Control Center access as AirPlay, so the same Accessibility
   permission and one-second keyboard pause apply. It needs the app update and Update VM.
-- **Dismiss all notifications also closes the Mac's.** In full screen macOS shows its banners and
-  alerts (such as *App Background Activity*) over the VM, where nothing in the VM reaches them.
-  Omarchy's own Super+Shift+, now also closes the ones on the Mac's screen, through the Bridge
-  (its Accessibility permission), while the VM is in front. Omarchy's other notification keys stay
-  the VM's. It comes with Update VM.
+
+## 3.5.1
+
+Fixes for the Bridge next to Karabiner-Elements and for llama.cpp with Vulkan, and a clearer
+Omanotch check line.
+
+- **Bridge memory next to Karabiner-Elements** (#813, reported by @ilyador): when another app held
+  a keyboard for itself (Karabiner-Elements does), OmacVM Bridge tried to read the keyboards again
+  every 2 seconds with a new reader, and each try kept about 0.4 MB that macOS never gave back: the
+  Bridge grew to gigabytes over a few hours. It now keeps one reader and tries again after 2 s, then
+  waits twice as long each time, up to 5 minutes. Needs the app update.
+- **Vulkan apps that map large memory** (#786): with Vulkan on KosmicKrisp, OmacVM told apps that
+  mapped memory is aligned to 16 KiB, but the VM maps it on 4 KiB pages. llama.cpp then stopped
+  while loading a model ("not enough space in the buffer") unless started with `--no-host`. The VM
+  is now told 4 KiB, and llama.cpp runs with its default settings. Needs the app update, from the
+  VM's next start.
+- **Omanotch's bar copy** (seen in #829's report by @epicoun): when Omarchy's `omarchy plugin
+  clone` could not make the bar copy, `omacvm check` now says why instead of "made no copy ()".
+- **Draw only what changed** (Battery saver, experimental, off by default): now checked together
+  with Copy only what changed (on by default), in a window and in full screen at 120 Hz, and on its
+  own with HDR on: the same pixels. Its (i) gives the MacBook Air M2's figures for the two together:
+  about 7 % less power with a chat's typing dots, about 3 % with the pointer moving over app windows.
+
+## 3.5.0
+
+The power release: the VM copies only what changed on screen, its sound wakes the Mac less, and new
+experimental savers sit together in one Battery saver group.
+Watt figures are from a MacBook Air M2 (whole Mac); other Macs are not measured yet.
+
+- **Copy only what changed** (on by default, not for HDR starts yet): the VM now tells QEMU which
+  part of the screen changed, and QEMU copies only that part into the window. Same pixels, less GPU
+  work. MacBook Air M2: about 0.22 W less with a chat's typing dots, 0.08 W moving the pointer,
+  0.1 W scrolling, 0.17 W with a 1080p60 video. On a VM kernel before Linux 7.4 this uses OmacVM's
+  own build of the graphics driver, which Update VM builds (internet needed once). A switch in the
+  VM window's Display section turns it off.
+- **Sound wakes the Mac less**: the VM's sound thread ticked 1000 times a second while anything
+  played; it now ticks with the stream (about every 5 ms). Same delay. MacBook Air M2, a video with
+  sound: about 0.1 W less.
+- **Fewer dropped video frames at 60 Hz**: the VM's display ran a hair below the Mac's rate
+  (59.994 Hz on a MacBook Air), and Chrome dropped about 1 % of the frames of 60 fps videos. It now
+  stays at the Mac's rate. Fewer drops, not none yet. Update VM puts it in.
+- **Smoother 60 fps video in Chromium**: Chromium could show one frame twice and skip the next,
+  every third frame for seconds at a time (on a MacBook Air up to 1-3 % of the frames of 60 fps
+  VP9 video, YouTube included, in bursts). Chromium timed each video to its first guess of the
+  frame length, and with YouTube's VP9 that guess was often a hair off the screen's. OmacVM now
+  switches that per-video throttle off in Chromium's flags (`OnBeginFrameThrottleVideo` in
+  `~/.config/chromium-flags.conf`), so videos follow the screen's real refresh again. Google Chrome
+  does the same; OmacVM does not manage its flags (add
+  `--disable-features=OnBeginFrameThrottleVideo` to its command line). From the VM's next Update VM
+  and a Chromium restart.
+- **Prefer VP9 on YouTube** (experimental, off by default, Macs without AV1 decoding: M1, M2):
+  YouTube then sends VP9, which the Mac's media engine decodes, instead of AV1 on the VM's CPUs.
+  MacBook Air M2, a 1080p60 video: about 1.2 W less. Videos only in AV1 are not offered, and for
+  now about 1-3 % of frames drop at 1080p60. Remove it in chrome://extensions at any time.
+- **VM CPU clock saver** (experimental, off by default): the VM's CPUs get the clock their own work
+  needs, not the high clock macOS gives the app in front. MacBook Air M2: about 0.5 W less with a
+  1080p60 video the VM decodes itself (AV1), nothing for scrolling or at idle; now and then a
+  dropped video frame. Works at once in a running VM.
+- **HDR only in full screen** (experimental, off by default): the VM's main display runs as with
+  HDR off until a window goes full screen. HDR in a window shows as SDR. Not measured on an HDR Mac
+  yet. The VM's part comes with Update VM.
+- **HDR**: a frame is no longer shown in the wrong colours when the VM's display switches between
+  10-bit and 8-bit twice within half a second.
+- **Vulkan in the VM: pipeline caches** start empty on the Mac's side. An app that saves its
+  pipeline cache (Zink, some games) builds its pipelines again at each start; macOS's own shader
+  cache keeps that short.
+- **Vulkan in the VM: lost devices**: when the Mac's driver loses a VM app's Vulkan device, new
+  Vulkan devices in that VM wait 10 s, longer (up to 10 min) when it keeps happening within
+  30 min. Apps already running go on.
+- **Fewer animations** (experimental, off by default): a window's border takes its new colour at
+  once when the focus moves, instead of fading. While a border fades, the VM redraws both windows
+  in every frame. MacBook Air M2, the pointer moving across windows: about 0.43 W less. Every other
+  animation, blur and shadows stay as they are; Omarchy's own "no animations" switch stays
+  Omarchy's. Omarchy 4.0 and 4.5.
+- **Battery saver**: the VM window's switches that save battery are now together in one card after
+  Display, instead of spread over General and Display. Each still works alone; the switch at the
+  top turns on or off all those this Mac can use, and says how many are on. It never turns HDR on
+  for HDR only in full screen.
+- **VM driver status after a kernel update**: when an Omarchy update replaced the running kernel,
+  Update VM said the graphics driver was "not built" and had "no kernel headers", though the VM ran
+  with it. It now says the driver is built for the kernel of the next start, and that this start's
+  kernel was replaced.
+- **Graphics memory in the control centre**: right after a job ended, the control centre could
+  lose the VM's graphics memory figures for up to 10 s. The Bridge now looks for the VM again at
+  once.
+- **Dismiss all notifications also closes the Mac's** (#795, by @rubas). In full screen macOS shows
+  its banners and alerts (such as *App Background Activity*) over the VM, where nothing in the VM
+  reaches them. Omarchy's own Super+Shift+, now also closes the ones on the Mac's screen, through
+  the Bridge (its Accessibility permission), while the VM is in front. Omarchy's other notification
+  keys stay the VM's. It comes with Update VM.
+- **The escape combo always comes back** (#826, by @rubas). When OmacVM Gestures' event tap stalled
+  three times in 10 minutes (seen while other VMs started next to a full-screen one), Gestures gave
+  the tap up until the Accessibility list changed. Ctrl+Option+Esc then went to the VM, and a Mac
+  without a trackpad had no way out of the full-screen VM until Gestures was restarted. Now each
+  further stall waits 30 s, and the tap and the combo come back by themselves. Gestures also gives a
+  busy VM app 0.1 s, not macOS's default, to name its window, a wait that could stall the tap.
+- **Two ssh connections at once** (#807, by @rubas): with the VM's SSH on the user network, one of two
+  connections that came at the same moment was reset. QEMU's network library listened with a queue
+  of 1 on macOS; it now takes as many as macOS allows. Needs the app update.
+- **Allow… keeps keyboard access** (#806, by @rubas): Allow…, clicked while the row was still red
+  right after switching OmacVM on in System Settings, took the permission away again, so ⌘ Tab and
+  ⌘ Space went to macOS at the next VM start. It now resets only on a definite no from macOS, and
+  the help names the list as this macOS does ("Device Control and Data Access" on macOS 27).
+- **A hidden VM keeps its speed on macOS 27** (#808, by @rubas): about 30 s after its window went
+  out of sight (another app in front, the screen locked), macOS 27 slowed the whole VM down despite
+  OmacVM's App Nap setting; timers in the VM woke 100-150 ms late. QEMU now opts out of App Nap
+  completely. Needs the app update.
+- **A Hyprland binding can leave the full-screen VM** (#797, by @rubas): Hyprland's custom event
+  `omacvm-escape` (for example `hl.bind("SUPER + ALT + ESCAPE", hl.dsp.event("omacvm-escape"))` in
+  your own config) leaves the full-screen VM as Ctrl+Option+Esc does. OmacVM binds no key itself.
+  Needs the app update (OmacVM Gestures) and Update VM; trackpad gestures on.
+
+## 3.4.8
+
+The VM's Caps Lock follows the Mac's again after a new session, a restart in the VM or a start with it on.
+
+- **Caps Lock** (#784, reported by @epicoun): after a new desktop session, a restart inside the VM
+  or a VM start with the Mac's Caps Lock on, the VM's Caps Lock could come back the other way round:
+  capitals with the Mac's light off, until Caps Lock was pressed outside the VM. The VM now reads
+  its own Caps Lock from its keyboard light and follows the Mac's again at the next key or pointer
+  move. Shift + Caps Lock (Compose on Omarchy 4.5) no longer turns it round either: the Mac's light
+  may stay on then, the VM's Caps Lock stays as it was. Needs the app update, from the VM's next
+  start.
+
+## 3.4.7
+
+x86 apps switch on in 3 GB VMs, and HDR holds after a quick re-login and in Hyprland 0.57.2 screenshots.
+
+- **x86 Linux apps in small VMs**: switching them on failed in 3 GB VMs, and in 4 GB VMs with apps
+  open ("the build failed"): one file of box64 needed about 4.1 GB to compile, and the VM's kernel
+  killed the compiler. box64 now builds without debug info and with GCC freeing memory sooner
+  (about 1.2 GB), so a 3 GB VM gets through with the desktop open; a VM that has box64 keeps it.
+  With less than 1.5 GB free in the VM, switching it on stops at once and says so, and a compiler
+  killed anyway is named as the VM running out of memory (troubleshooting 65).
+- **HDR after a quick re-login**: after logging out and in within about 10 s (or after SDDM
+  restarted), pages looked 3-4 % darker with highlights cut until the next reboot. The VM's
+  display sync kept its record of what it had sent across the new login, so the new Hyprland never
+  got the rule that stops it tone-mapping windows. It now sends its rules again to a new Hyprland.
+  Update VM puts it in.
+- **HDR screenshots on Hyprland 0.57.2** (Omarchy's edge channel, Arch Linux ARM's own Hyprland):
+  screenshots, colour picks and screen shares of Chrome came out too bright again, because
+  OmacVM's capture fix (#579) had files for 0.56.2 and 0.57.0 only. It now has one for 0.57.2.
+  Update VM puts it in; Omarchy's stable 0.56.2 is unchanged.
+- **Docs**: troubleshooting 66 says why YouTube's Ambient mode makes the Mac work harder (about
+  0.9 W on a MacBook Air M2) and where to turn it off; a new entry says why a top hot corner can
+  still fire over the strip beside the notch (it is the Mac's menu-bar area, not the VM's).
+
+## 3.4.6
+
+The app's questions get the keys, ISO keyboards type the right keys, and the move to 4.5 rides out SSH drops.
+
+- **Questions get the keys (OmacVM.app).** A question that came up with no click in the app, such
+  as USB's when a device was plugged in (experimental), did not get the keys: Return and Escape
+  went to the VM. macOS 14 and later bring a background app to the front only if the app there
+  lets it. Now these questions take the keys from the VM, on every Space and over a full-screen
+  VM, but never from another Mac app you work in: there they float and a click answers them. The
+  same holds for the lost desktop, Features… in the app menu, an update's shutdown timeout, a VM
+  that did not wake with the Mac, a start from a terminal and the USB Devices… list. The lost
+  desktop's, the Mac setup's and the fast network's questions wait half a second, as USB's does,
+  so a Return typed a moment earlier does not answer them. See
+  [ADR 0068](docs/adr/0068-ask-keys.md). Needs the app update, from the VM's next start.
+- **Correction to 3.2.18's USB Devices… entry (#660).** It says the mini's check was still to run
+  and the list on screen was not checked. Both were done for 3.2.18 on a Mac mini M4: with the
+  screen locked or nobody at it, each press built the list; in a window, opened by a real click on
+  the menu, the list came up and Connect, Disconnect and Return worked. Over a full-screen VM it is
+  still not checked.
+- **Move to Omarchy 4.5** (#771): a Resume could stop at step 4 with "OmacVM did not update in
+  the VM" and no reason. Right after the VM starts, its SSH can let the Mac in and then drop the
+  connection for a moment, without a message. The update's SSH key, Bridge token, control centre
+  and Touch ID keys and the copy of OmacVM now try again for up to 2 minutes when SSH drops, as
+  the move's own steps already did, and a copy cut between its two moves is put back first. An
+  apply that stops without its own message now says so, with the exit code and its last step. The
+  move keeps the last 9 apply logs (was 4).
+- **Apple ISO keyboards** (#784, reported by @epicoun): the key left of 1 and the key left of Z
+  reached the VM swapped, so on a German ISO keyboard `^` typed `<` and `<` typed `^`. OmacVM's
+  QEMU has a fix for this, but it acts only when told the keyboard is ISO, and the app never told
+  it. The app now does at each VM start, from macOS's own keyboard type, as OmacVM Gestures
+  already did. Needs the app update, from the VM's next start; an XKB swap set up in the VM as a
+  workaround must be taken out again.
+- **The Mac's pointer in full screen** (#788, reported and cause found by @hadiskeini): with the
+  hidden `macPointer` setting and "Keep the Dock and hot corners away" on, the cursor pushed along
+  a display edge stopped about 200 points before a corner, while the VM's pointer went on. Near a
+  corner OmacVM moves the Mac's cursor itself, and its first move came before the cursor was
+  detached from the mouse, so the push could move it on and OmacVM lost track of it. The cursor is
+  now detached first, and OmacVM takes the cursor's real place when the two differ. Needs the app
+  update. Without `macPointer` the Mac's cursor is hidden over the VM, so this was not seen there.
 
 ## 3.4.5
 
