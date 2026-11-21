@@ -27,6 +27,7 @@ mac-clock:the Mac's format is read only when on (apply); clock.sh off, also a qu
 camera:camera/guest/install.sh off on every apply; OmacVM.app does not serve the camera port
 battery:battery/guest/install.sh off on every apply; OmacVM.app does not serve the battery port
 external-brightness:install.sh removes OmacVM's ddcutil on every apply; apply sets the Bridge's external_brightness false, so no DDC (src/tests/external-brightness.sh)
+logo-light:install.sh removes omacvm-logo on every apply; apply sets the Bridge's logo_light false, so the Bridge gives the logo back to macOS and refuses /logo (src/tests/logo-light.sh)
 chromium-video:vdec/guest/install.sh off on every apply of an app VM; never on the other routes; nothing of it talks to the Mac
 control-centre:control/guest/install.sh off removes omacvm, its check socket, menu row and bar item (install.sh runs it while any of them is there); nothing left in the VM asks the Mac
 no-idle-lock:nothing of it talks to the Mac; off is Omarchy's own screensaver and lock

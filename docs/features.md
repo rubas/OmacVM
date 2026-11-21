@@ -27,6 +27,7 @@ The short version is the grid at the top of the [README](../README.md).
 | **The Mac's clock** | Omarchy's clock at the far right of the bar, in your Mac's menu bar format (day, date, 12 or 24 hours, seconds, language) |
 | **The Mac's time zone** *(with the Bridge)* | The VM's time zone follows the Mac's: at every start and when the Mac's changes (you travel). A zone you set in the VM yourself is kept; set it back to the Mac's and it follows again |
 | **The Mac's battery** | On a MacBook, Omarchy's battery icon and panel show the Mac's charge and charging, as on a laptop, plus time left and Omarchy's low-battery warning (not tested yet with the Mac on battery; the VM never suspends for it) |
+| **The Apple logo's light** *(on a MacBook Pro with a lit logo)* | `omacvm-logo` in the VM sets the lit Apple logo on the lid: macOS's own, off, steady at a brightness or breathing, every change a 3 s fade. Dark while the display sleeps, macOS's again when the VM stops ([details](#the-apple-logos-light)) |
 | **Your keyboard layout** | Taken from the Mac |
 | **Chromium video on the Mac** *(on by default)* | Omarchy's own Chromium decodes H.264 and VP9 (YouTube included) on the Mac's media engine, as Google Chrome and Brave do on their own: YouTube 4K takes about half the CPU it takes otherwise. A small kernel module and a sandboxed decoder service in the VM; a video it cannot take plays on the CPU. Off: `omacvm disable chromium-video` ([details](video-decode.md#chromium-from-arch-linux-arm)) |
 | **The display stays on for a video** | While a video plays in the VM and its window can be seen, the Mac's display does not turn off by itself, as with a Mac video player. A paused video, music, a minimised or covered window, another Space, a locked screen or a stopped VM let it sleep as usual; the Mac itself still sleeps when the lid closes. mpv and Omarchy's Chromium (also its web apps such as YouTube) count; Chromium counts only while it holds its display wake lock (a video playing where it can be seen), not for music, downloads or calls. Firefox counts for a video that plays where it can be seen and a page's screen wake lock (not music or downloads; restart Firefox once after Update VM), and while such a video can be seen the VM's own screensaver and lock wait too, as for Chromium ([details](troubleshooting.md#56-app-the-macs-display-turns-off-while-a-video-plays-in-the-vm)). Needs the app update and Update VM |
@@ -347,6 +348,68 @@ VM is on:
   through the Bridge's `config.json` (`external_brightness`), out of the
   keys. Off means no DDC/CI at all: the Bridge then does not even read the
   displays. The Bridge is one for all VMs, so the last `omacvm apply` decides.
+
+## The Apple logo's light
+
+Newer MacBook Pros light the Apple logo on the lid, and macOS drives it: it
+follows the display's brightness and the room's light. With `logo-light` (on
+by default on a Mac that has the lit logo, needs the Bridge), the VM sets it:
+
+```bash
+omacvm-logo               # the mode that plays: auto, off, on 50 or breathe 15
+omacvm-logo auto          # macOS lights it, as without OmacVM
+omacvm-logo off           # dark
+omacvm-logo on 50         # steady, 1 to 100 (default 50)
+omacvm-logo breathe 15    # breathes, 6 to 30 breaths a minute (default 15)
+```
+
+- **How bright `on` is.** As the eye sees it: CIE L* of the logo's light, 100
+  the brightest macOS itself drives it (1000 nits, about 80 % of the LED's
+  duty). `on 50` is about 15 % duty, near macOS's own level in a lit room.
+  `on` stays at its level; `auto` is the one that follows the room.
+- **The breath.** Each breath has the shape of a lung's volume: a soft turn
+  at the top and a fall that slows into a long tail. Its length, depth and
+  split of in and out wander a little from breath to breath, with a deeper
+  one now and then, and it never goes dark. `breathe N` changes only the rate.
+- **Every change fades** over 3 s, from the level the logo has.
+- **macOS's own changes.** macOS writes its level whenever the room's light
+  or the display's brightness changes. `on` and `breathe` give way and fade
+  back in from that level once it has stood still for a second; `off` stays
+  dark through them.
+- **Sleep and the lid.** While the display sleeps or the lid is closed the
+  logo is dark, as macOS keeps it, and the mode plays again after the wake.
+- **Whose mode.** The VM's that set it last. When that VM stops, and when the
+  Bridge stops, the logo is macOS's again (`auto`); a Bridge that was killed
+  leaves a note, so the next one gives it back.
+- **In scripts.** Exit 0 done, 1 the Mac's side failed or cannot be reached
+  (try again), 2 usage (nothing is sent), 3 the Mac has no lit logo (or the
+  feature is off on the Mac). The mode prints as the words that set it, so it
+  can be put back:
+
+  ```bash
+  was=$(omacvm-logo)
+  omacvm-logo breathe 20      # while a long job runs
+  make -j8
+  omacvm-logo $was            # unquoted: "on 50" is two words
+  ```
+
+- **In Omarchy's bar.** A command widget in `bar.layout` of
+  `~/.config/omarchy/shell.json` shows the mode and a click switches the
+  breath on and off:
+
+  ```json
+  { "id": "logo", "type": "command", "exec": "omacvm-logo", "interval": 5, "tooltip": "The Mac's logo",
+    "onClick": "bash -c '[[ $(omacvm-logo) == breathe* ]] && omacvm-logo auto || omacvm-logo breathe'" }
+  ```
+
+- **How it works.** The VM only names a mode; the Bridge checks it and plays
+  it on the logo's light itself, next to macOS
+  ([the Bridge's /logo](../src/bridge/README.md#the-apple-logos-light)).
+  macOS's own setting for the logo is never changed.
+- **Off.** `omacvm disable logo-light` takes `omacvm-logo` out of the VM and,
+  through the Bridge's `config.json` (`logo_light`), gives the logo back to
+  macOS. The Bridge is one for all VMs, so the last `omacvm apply` decides.
+  `omacvm check` says which mode plays.
 
 ## macOS-native scroll momentum
 

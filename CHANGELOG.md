@@ -5,6 +5,11 @@ in more words.
 
 ## Unreleased
 
+- **The Apple logo's light.** On a MacBook Pro with a lit Apple logo on its lid, `omacvm-logo` in
+  the VM sets it: macOS's own (`auto`), `off`, steady (`on 1-100`, as bright as the eye sees it) or
+  breathing (`breathe 6-30` breaths a minute), every change a 3 s fade. The Mac plays it through the
+  Bridge: dark while the display sleeps or the lid is closed, macOS's again when the VM stops.
+  Feature `logo-light`, on by default on a Mac with the lit logo; it comes with Update VM.
 - **Dismiss all notifications also closes the Mac's.** In full screen macOS shows its banners and
   alerts (such as *App Background Activity*) over the VM, where nothing in the VM reaches them.
   Omarchy's own Super+Shift+, now also closes the ones on the Mac's screen, through the Bridge
