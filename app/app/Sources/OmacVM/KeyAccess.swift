@@ -81,7 +81,7 @@ enum KeyAccess {
     static var missingText: String {
         let app = (Bundle.main.bundlePath as NSString).abbreviatingWithTildeInPath
         let id = Bundle.main.bundleIdentifier ?? "org.omacvm.app"
-        return "Without it, ⌘ Tab, ⌘ Space and ⌘ ⇧ 4 go to macOS instead of Omarchy. Input Monitoring is not enough.\n\n1. Allow… clears what macOS kept for an older OmacVM build (OmacVM can show as on and still not count) and opens System Settings › Privacy & Security › \(listName), where macOS now lists OmacVM, switched off.\n2. Turn OmacVM on there. This note turns grey by itself.\n3. Quit the VM and start it again.\n\nStill red: select OmacVM there, remove it with −, add \(app) with + and turn it on. Or in Terminal: tccutil reset PostEvent \(id)"
+        return "Without it, ⌘ Tab, ⌘ Space and ⌘ ⇧ 4 go to macOS instead of Omarchy. Input Monitoring is not enough.\n\n1. Allow… clears what macOS kept for an older OmacVM build (OmacVM can show as on and still not count) and opens System Settings › Privacy & Security › \(listName). macOS lists OmacVM there, switched off.\n2. Turn OmacVM on there. This note turns grey by itself.\n3. Quit the VM and start it again.\n\nStill red: select OmacVM there, remove it with −, add \(app) with + and turn it on. Or in Terminal: tccutil reset PostEvent \(id)"
     }
 
     /// macOS keeps "control the computer" (kTCCServicePostEvent) as an entry
