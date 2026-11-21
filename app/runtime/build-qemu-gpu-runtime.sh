@@ -582,6 +582,9 @@ patch -d "$source_parent/$slirp_source_root" -p1 -f -i "$native_dir/patches/omac
 # Non-blocking UDP/ICMP sockets: a send the Mac cannot take at once is dropped
 # instead of freezing the VM (Tests/net/test-slirp-udp-stall.sh).
 patch -d "$source_parent/$slirp_source_root" -p1 -f -i "$native_dir/patches/libslirp-nonblocking-datagram-sockets.patch"
+# Host forwards listen with SOMAXCONN: with 1, macOS resets one of two
+# connections that come at once (Tests/net/test-slirp-hostfwd-burst.sh).
+patch -d "$source_parent/$slirp_source_root" -p1 -f -i "$native_dir/patches/libslirp-hostfwd-listen-backlog.patch"
 tar -xzf "$qemu_archive" -C "$source_parent"
 tar -xzf "$virgl_archive" -C "$source_parent"
 tar -xzf "$virgl_tap_archive" -C "$source_parent"
@@ -1037,6 +1040,15 @@ patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-modifier-stat
 patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-modifier-state.patch"
 "$native_dir/Tests/keys/test-modifier-state.sh" "$source_dir/ui/cocoa.m" || \
   die "ui/cocoa.m: the modifier keys are not set from the flags as tested (test-modifier-state.sh)"
+# The guest's Caps Lock from its LEDs: a lock the guest lost (a new session, a
+# restart inside the VM, a press before its keyboard started) comes back at the
+# next event (#784); a virtio keyboard reports its start and, reset, no LED lit.
+# Its rules' test, then the wiring.
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-caps-lock-logic.patch"
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-caps-lock.patch"
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-virtio-input-leds-reset.patch"
+"$native_dir/Tests/keys/test-caps-lock.sh" "$source_dir/ui/cocoa.m" || \
+  die "ui/cocoa.m: Caps Lock does not follow the guest's LED as tested (test-caps-lock.sh)"
 # The VM's windows follow the Mac's displays once they settle: one update at a
 # time from a timer, none while locked or asleep, inactive or 1 x 1 displays
 # absent, full-screen tries per display (#428: a display gone while the Mac
@@ -1067,6 +1079,11 @@ patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-fullpanel-lat
 patch -d "$source_dir" -p1 -f -i "$native_dir/patches/qemu-audio-own-thread.patch"
 grep -q 'getenv("OMACVM_AUDIO_THREAD")' "$source_dir/audio/audio-rt.c" || \
   die "audio/audio-rt.c: the sound's own thread is missing (audio-own-thread patch)"
+# Its tick follows the streams (the guest's DMA entries, the codec's buffer,
+# the Mac's output buffer) instead of every 1 ms.
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/qemu-audio-tick-follows-stream.patch"
+grep -q 'audio_rt_update_period' "$source_dir/audio/audio-rt.c" || \
+  die "audio/audio-rt.c: the sound thread's tick does not follow the streams (tick-follows-stream patch)"
 # OmacVM: the VM's GPU work without the BQL (OMACVM_GPU_UNLOCKED=1, ADR 0046):
 # the present BH on the main thread only, a GPU lock for the AppKit thread's
 # own virgl draws, then the unlocked runs in virtio-gpu.
@@ -1234,6 +1251,14 @@ patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-present-volat
 # skip must still be wired as present-unseen's test reads it.
 "$native_dir/Tests/display/test-present-unseen.sh" "$source_dir/ui/cocoa.m" || \
   die "ui/cocoa.m: frames are drawn for a window out of sight after the volatile patch (test-present-unseen.sh)"
+# OmacVM: the tiled present also when frames are shown when drawn (OMACVM_GL_VSYNC=0;
+# ADR 0055's addendum of 2026-11-17): hidden test windows, whose display link never
+# ticks, run tiles + partial present in check mode. The vsync present is unchanged.
+"$native_dir/Tests/display/test-present-tiles-direct.sh" --self-test "$source_dir/ui/cocoa.m" || \
+  die "ui/cocoa.m: a tiles-when-drawn wiring check passes without the patch (test-present-tiles-direct.sh)"
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-present-tiles-direct.patch"
+"$native_dir/Tests/display/test-present-tiles-direct.sh" "$source_dir/ui/cocoa.m" || \
+  die "ui/cocoa.m: the tiled present when drawn is not wired as tested (test-present-tiles-direct.sh)"
 # OmacVM: drag and drop of files into the VM (drag-drop, ADR 0069): with
 # OMACVM_DROP_SOCKET the VM's windows take files and hand them, open, to the
 # app. Its rules' test, a check that the wiring checks fail on the code
@@ -1253,11 +1278,43 @@ patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-video-awake-l
 patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-video-awake.patch"
 "$native_dir/Tests/display/test-video-awake.sh" "$source_dir/ui/cocoa.m" || \
   die "ui/cocoa.m: the display is not kept on for a video as tested, or its rules fail (test-video-awake.sh)"
+# OmacVM: VM CPU clock saver (experimental, off by default; ADR 0073): with
+# the app's switch on, the vCPU threads join a work interval of their own,
+# so macOS sets their clock by their own load. Its rules' test, a check that
+# the wiring checks fail on the code before, the wiring. Before no-app-nap.
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/qemu-hvf-vcpu-clock-saver-logic.patch"
+"$native_dir/Tests/vcpu/test-vcpu-clock-saver.sh" --self-test "$source_dir/accel/hvf/hvf-accel-ops.c" "$source_dir/ui/cocoa.m" || \
+  die "a VM CPU clock saver wiring check passes without the patches (test-vcpu-clock-saver.sh)"
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/qemu-hvf-vcpu-clock-saver.patch"
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-vcpu-clock-saver.patch"
+"$native_dir/Tests/vcpu/test-vcpu-clock-saver.sh" "$source_dir/accel/hvf/hvf-accel-ops.c" "$source_dir/ui/cocoa.m" || \
+  die "the VM CPU clock saver is not wired as tested, or its rules fail (test-vcpu-clock-saver.sh)"
+# The wiring check reads only these two files, so no other file (audio/,
+# other ui/ code) may reach the clock saver's group.
+vcs_users="$(cd "$source_dir" && { grep -rl --include='*.c' --include='*.m' --include='*.h' 'qemu/omacvm-vcpu-clock-saver.h' . || true; } | sed 's|^\./||' | sort | tr '\n' ' ')"
+[ "$vcs_users" = "accel/hvf/hvf-accel-ops.c ui/cocoa.m " ] || \
+  die "only accel/hvf/hvf-accel-ops.c and ui/cocoa.m may include qemu/omacvm-vcpu-clock-saver.h (found: $vcs_users)"
+# OmacVM: no frame shown in surfaces of the other colour (PQ in 8-bit sRGB
+# ones or sRGB in PQ ones: held until the right ones are made), and HDR only
+# in full screen (experimental, ADR 0074): the app's switch, the layout's
+# "hdr_follow" for the guest, the headroom it is told while SDR. Its rules'
+# test, a check that the wiring checks fail on the code before, the wiring.
+# Before no-app-nap.
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-hdr-follow-logic.patch"
+"$native_dir/Tests/display/test-hdr-follow.sh" --self-test "$source_dir/ui/cocoa.m" || \
+  die "ui/cocoa.m: an HDR-follow wiring check passes without the patches (test-hdr-follow.sh)"
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-present-depth-hold.patch"
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-hdr-follow.patch"
+"$native_dir/Tests/display/test-hdr-follow.sh" "$source_dir/ui/cocoa.m" || \
+  die "ui/cocoa.m: the depth hold or HDR only in full screen is not wired as tested (test-hdr-follow.sh)"
 # OmacVM: no App Nap while the VM runs: with its window out of sight (screen
-# locked, another Space) macOS slowed the whole VM to a few percent.
+# locked, another Space) macOS slowed the whole VM to a few percent, and on
+# macOS 27 clamped it to Utility QoS despite the activity.
 patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-no-app-nap.patch"
 grep -q 'beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep' "$source_dir/ui/cocoa.m" || \
   die "ui/cocoa.m: QEMU's window process must not be napped (no-app-nap patch)"
+grep -qF 'registerDefaults:@{ @"NSAppSleepDisabled": @YES }' "$source_dir/ui/cocoa.m" || \
+  die "ui/cocoa.m: QEMU's window process must opt out of App Nap (no-app-nap patch)"
 
 virgl_root="$dependency_root/virglrenderer/$virgl_version"
 angle_root="$dependency_root/angle/$angle_version"
@@ -1868,6 +1925,25 @@ patch -d "$virgl_source" -p1 -f -i "$native_dir/patches/virgl-venus-refusal-text
   [[ $(grep -cF 'if ((unsigned char)*c < 0x20)' "$virgl_source/src/venus/vkr_context.c") == 2 ]] && \
   grep -qxF '              name, call, why,' "$virgl_source/src/venus/vkr_context.c" || \
   die "vkr_pipeline.c, vkr_context.c: refusal reasons are cut at 192 bytes, span lines or keep control bytes (refusal-text patch)"
+# Pipeline caches start empty: the guest's initial data does not reach the driver (vkr's
+# checks on guest input do not cover the drivers' own cache loaders).
+patch -d "$virgl_source" -p1 -f -i "$native_dir/patches/virgl-venus-cache-data.patch"
+grep -q 'info.pInitialData = NULL;' "$virgl_source/src/venus/vkr_pipeline.c" || \
+  die "vkr_pipeline.c: the guest's pipeline cache data reaches the driver (cache-data patch)"
+# minMemoryMapAlignment as the guest's own mapping gives it (at most 4096): the guest kernel
+# places every Venus mapping on a guest page, KosmicKrisp says 16384 (#786: llama.cpp).
+patch -d "$virgl_source" -p1 -f -i "$native_dir/patches/virgl-venus-map-alignment.patch"
+[[ $(grep -c 'minMemoryMapAlignment > VKR_GUEST_MAP_ALIGNMENT' "$virgl_source/src/venus/vkr_physical_device.c") == 2 ]] && \
+  grep -qx '#define VKR_GUEST_MAP_ALIGNMENT 4096' "$virgl_source/src/venus/vkr_physical_device.c" || \
+  die "vkr_physical_device.c: the guest is told the host driver's minMemoryMapAlignment (map-alignment patch)"
+# A device the Mac's driver lost holds new Venus devices back for a while, so a VM app that is
+# started again and again after a lost device does not go straight back to the driver. Its
+# rules on their own first; made against the fully patched tree, so it comes last.
+"$native_dir/Tests/virgl/test-venus-restart-guard.sh"
+patch -d "$virgl_source" -p1 -f -i "$native_dir/patches/virgl-venus-device-lost-backoff.patch"
+grep -q 'if (!vkr_device_restart_ok(ctx)) {' "$virgl_source/src/venus/vkr_device.c" && \
+  [[ $(grep -c 'vkr_device_note_lost(' "$virgl_source/src/venus/vkr_queue.c") == 8 ]] || \
+  die "vkr_device.c, vkr_queue.c: lost devices do not hold new ones back (device-lost-backoff patch)"
 # entries are never NULL: VKR_MISSING tells a stub. Checked on the fully patched tree, after the
 # last Venus patch (vkr_allocator.c keeps tables of its own, venus-protocol's loader fallbacks run
 # before the stubs).
@@ -2111,6 +2187,12 @@ log "Relocating, capability-gating, signing, and publishing the runtime"
 "$native_dir/Tests/net/test-slirp-udp-stall.sh" \
   "$native_dir/.build/qemu-gpu-runtime/bin/qemu-system-aarch64" || \
   die "the slirp UDP stall test failed"
+
+# Two connections at once to a host forward (an ssh port without a window)
+# must both work (an idle QEMU without guest, a few seconds).
+"$native_dir/Tests/net/test-slirp-hostfwd-burst.sh" \
+  "$native_dir/.build/qemu-gpu-runtime/bin/qemu-system-aarch64" || \
+  die "the slirp host forward burst test failed"
 
 # A guest's Vulkan calls never reach the Mac's driver with what Metal ends QEMU on, and what
 # ended QEMU's process in vkr now ends only the app's context (ADR 0065): each case through

@@ -69,7 +69,9 @@ enum KeyAccess {
     /// The list in System Settings › Privacy & Security that holds "control
     /// the computer", by the name this macOS shows: "Accessibility", and
     /// "Device Control and Data Access" on macOS 27.2. System Settings' own
-    /// text, so the window names the row the user looks for there.
+    /// text, so the window names the row the user looks for there. English,
+    /// as the rest of the path: OmacVM has no other language, so macOS gives
+    /// it the pane's English strings.
     static let listName: String = {
         let pane = Bundle(path: "/System/Library/ExtensionKit/Extensions/SecurityPrivacyExtension.appex")
         return pane?.localizedString(forKey: "ACCESSIBILITY", value: "Accessibility", table: nil) ?? "Accessibility"
@@ -151,8 +153,16 @@ enum KeyAccess {
         guard !clearedOnce else { return }
         clearedOnce = true
         DispatchQueue.global(qos: .utility).async {
-            reset("PostEvent")
+            clearOldEntry(reset: reset, post: fresh)
             DispatchQueue.main.async { MainActor.assumeIsolated { done() } }
         }
+    }
+
+    /// The red note's reset: only on macOS's no now (`fresh`), as in Allow…;
+    /// the note is red also when the new process gave no answer, and then
+    /// nothing goes. The parts are passed in for the test.
+    static func clearOldEntry(reset: (String) -> Void, post: () -> Bool?) {
+        guard post() == false else { return }
+        reset("PostEvent")
     }
 }
