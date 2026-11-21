@@ -310,7 +310,8 @@ func logoRequest(_ fd: Int32, peer: String, method: String, body: Data) {
                             "code": "off"]
   switch method {
   case "GET":
-    respond(fd, logo.enabled ? 200 : 409, logo.enabled ? logo.mode.json : off)
+    let s = logo.state
+    respond(fd, s.enabled ? 200 : 409, s.enabled ? s.mode.json : off)
   case "POST":
     let mode: LogoMode
     switch LogoMode.parse(body) {
@@ -321,8 +322,11 @@ func logoRequest(_ fd: Int32, peer: String, method: String, body: Data) {
       logRefusal("logo \(peer)", "/logo from \(peer): refused, not from a VM that runs in OmacVM.app here")
       return respond(fd, 403, ["error": "only a VM that runs in OmacVM.app on this Mac sets the logo", "code": "not-a-vm"])
     }
-    guard logo.set(mode, owner: vm) else { return respond(fd, 409, off) }
-    log("/logo from \(peer) (VM pid \(vm)): \(mode.words)")
+    switch logo.set(mode, owner: vm) {
+    case .refused: return respond(fd, 409, off)
+    case .changed: log("/logo from \(peer) (VM pid \(vm)): \(mode.words)")
+    case .kept: break
+    }
     respond(fd, 200, mode.json)
   default:
     respond(fd, 405, ["error": "method not allowed"])

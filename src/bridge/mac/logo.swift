@@ -192,18 +192,22 @@ final class LogoLight {
     }
   }
 
-  /// The mode it plays, as the VM asked for it.
-  var mode: LogoMode { q.sync { want } }
+  /// The feature on this Mac (logo_light) and the mode it plays, as the VM asked for it.
+  var state: (enabled: Bool, mode: LogoMode) { q.sync { (on, want) } }
+
+  enum Outcome { case refused, kept, changed }
 
   /// A VM's mode, owned by that VM's process until it stops or another VM sets
-  /// one. False: the logo light is off on this Mac.
-  func set(_ mode: LogoMode, owner pid: pid_t) -> Bool {
+  /// one. refused: the logo light is off on this Mac; kept: it plays that
+  /// already, for that VM.
+  func set(_ mode: LogoMode, owner pid: pid_t) -> Outcome {
     q.sync {
-      guard on, !stopped else { return false }
+      guard on, !stopped else { return .refused }
+      if mode == want && (mode == .auto || owner == pid) { return .kept }
       want = mode
       watch(mode == .auto ? nil : pid)
       kick()
-      return true
+      return .changed
     }
   }
 
@@ -219,8 +223,6 @@ final class LogoLight {
       kick()
     }
   }
-
-  var enabled: Bool { q.sync { on } }
 
   /// The Bridge stops (SIGTERM from launchd, or Quit): a mode that writes fades
   /// to macOS's level first, as every change does; then the logo is macOS's.

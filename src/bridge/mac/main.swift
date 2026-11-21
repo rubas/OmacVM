@@ -216,7 +216,9 @@ log("config \(config.path): capture_keys=\(config.captureKeys) menu_bar_icon=\(c
 log("keyboard light: \(KeyboardLight.get() != nil ? "found" : "none on this Mac")")
 logoLight?.setEnabled(config.logoLight)
 config.onLogoLight = { logoLight?.setEnabled(config.logoLight) }
+// The logo goes back to macOS when the Bridge stops: launchd's SIGTERM, Quit, or AppKit's quit (a logout).
 logoLight?.stopOnSIGTERM()
+NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in logoLight?.stop() }
 let listenerTimer = DispatchSource.makeTimerSource(queue: .main)
 listenerTimer.schedule(deadline: .now() + tickSeconds, repeating: tickSeconds, leeway: .seconds(1))
 listenerTimer.setEventHandler { (servers + retiredServers).forEach { $0.check() }; relaySocket.check() }

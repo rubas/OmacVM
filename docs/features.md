@@ -382,9 +382,8 @@ omacvm-logo breathe 15    # breathes, 6 to 30 breaths a minute (default 15)
   Bridge stops, the logo is macOS's again (`auto`); a Bridge that was killed
   leaves a note, so the next one gives it back.
 - **In scripts.** Exit 0 done, 1 the Mac's side failed or cannot be reached
-  (try again), 2 usage (nothing is sent), 3 the Mac has no lit logo (or the
-  feature is off on the Mac). The mode prints as the words that set it, so it
-  can be put back:
+  (try again), 2 usage (nothing is sent), 3 the Mac has no lit logo. The mode
+  prints as the words that set it, so it can be put back:
 
   ```bash
   was=$(omacvm-logo)

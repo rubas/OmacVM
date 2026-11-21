@@ -316,9 +316,9 @@ curl "${H[@]}" -d '{"mode": "breathe", "rate": 12}' $B/logo
   duty only with all three, refuses one without `set-enabled` and switches the
   logo off then; a duty of 0 switches it off. macOS's own setting
   `LEBacklightMode` is never changed.
-- **When the Bridge stops.** SIGTERM (launchd) and Quit fade a playing mode
-  to macOS's level and end a blank first; then the Bridge ends as it would
-  without it. A Bridge that was killed leaves `logo-held` in its folder
+- **When the Bridge stops.** SIGTERM (launchd), Quit and AppKit's quit (a
+  logout) fade a playing mode to macOS's level and end a blank first; then the
+  Bridge ends as it would without it. A Bridge that was killed leaves `logo-held` in its folder
   (`blank` or `written`), and the next one gives the logo back first.
 - **Off** (`logo_light` false; `omacvm apply` sets it from the feature): the
   logo is macOS's, and `/logo` answers `409` `off`.

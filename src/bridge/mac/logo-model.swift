@@ -116,7 +116,7 @@ enum LogoCurve {
   /// on 50 is about 15 % duty, near the 17 to 21 % macOS gives it in a lit room.
   static func onTicks(_ percent: Int) -> Int {
     let l = Double(percent)
-    let y = l > 8 ? pow((l + 16) / 116, 3) : l / 903.3
+    let y = l > 8 ? luminance(l) : l / 903.3
     return max(1, Int((maxDuty * y * Double(period)).rounded()))
   }
 
