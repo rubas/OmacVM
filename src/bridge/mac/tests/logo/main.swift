@@ -288,43 +288,48 @@ func socketOwner() {
   check(VMProcess.ownProcesses().contains(getpid()), "this user's processes include this one")
 }
 
+/// True once `cond` holds, false after `seconds` (a busy CI Mac may take a while).
+func waitUntil(_ seconds: Double, _ cond: () -> Bool) -> Bool {
+  let end = Date().addingTimeInterval(seconds)
+  while !cond() { if Date() > end { return false }; usleep(20_000) }
+  return true
+}
+
 /// LogoLight with a made-up logo: the VM's end gives the logo back, and the hold is on disk while it holds.
 func owner() {
   let dir = NSTemporaryDirectory() + "logo-test-\(getpid())"
   try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
   defer { try? FileManager.default.removeItem(atPath: dir) }
   let held = dir + "/held"
-  let hw = FakeLogo()
-  let light = LogoLight(hw: hw, holdPath: held)
+  func hold() -> String? { try? String(contentsOfFile: held, encoding: .utf8) }
+  let light = LogoLight(hw: FakeLogo(), holdPath: held)
   let vm = Process()
   vm.executableURL = URL(fileURLWithPath: "/bin/sleep")
-  vm.arguments = ["2"]
+  vm.arguments = ["600"]
   try! vm.run()
+  defer { if vm.isRunning { vm.terminate() } }
   check(light.set(.off, owner: vm.processIdentifier) == .changed, "a VM sets off")
   check(light.set(.off, owner: vm.processIdentifier) == .kept, "the same again: kept, nothing to do")
-  usleep(300_000)
-  check((try? String(contentsOfFile: held, encoding: .utf8)) == "blank\n", "the hold is on disk: blank")
+  check(waitUntil(10) { hold() == "blank\n" }, "the hold is on disk: blank")
   check(light.state.mode == .off, "it plays off")
-  vm.waitUntilExit()
-  usleep(400_000)
-  check(light.state.mode == .auto, "the VM ended: auto")
-  check(!FileManager.default.fileExists(atPath: held), "nothing held: no file")
+  vm.terminate()
+  check(waitUntil(10) { light.state.mode == .auto }, "the VM ended: auto")
+  check(waitUntil(10) { hold() == nil }, "nothing held: no file")
   let gone = Process()
   gone.executableURL = URL(fileURLWithPath: "/usr/bin/true")
   try! gone.run(); gone.waitUntilExit()
   _ = light.set(.on(percent: 50), owner: gone.processIdentifier)
-  usleep(200_000)
-  check(light.state.mode == .auto, "a VM that ended before its mode came: auto")
+  check(waitUntil(10) { light.state.mode == .auto }, "a VM that ended before its mode came: auto")
   light.setEnabled(false)
   check(light.set(.off, owner: getpid()) == .refused && light.state.mode == .auto && !light.state.enabled, "off on this Mac: refused")
-  // A Bridge killed while off left its hold: the next one unblanks.
+  // A Bridge killed while off left its hold: the next one unblanks, and the hold goes.
   try? "blank\n".write(toFile: held, atomically: true, encoding: .utf8)
   let hw2 = FakeLogo()
   hw2.blankedAt = 0; hw2.on = false
   let light2 = LogoLight(hw: hw2, holdPath: held)
-  usleep(300_000)
+  check(waitUntil(10) { hold() == nil }, "a hold left on disk: the next one takes it")
   withExtendedLifetime(light2) {}
-  check(hw2.blanks.first.map { !$0.on } == true, "a hold left on disk: the next one gives the logo back")
+  check(hw2.blanks.first.map { !$0.on } == true, "... and gives the logo back")
 }
 
 func live(_ steps: [String]) {

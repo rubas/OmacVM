@@ -394,11 +394,11 @@ omacvm-logo breathe 15    # breathes, 6 to 30 breaths a minute (default 15)
 
 - **In Omarchy's bar.** A command widget in `bar.layout` of
   `~/.config/omarchy/shell.json` shows the mode and a click switches the
-  breath on and off:
+  breath on and off (the bar runs both with bash):
 
   ```json
-  { "id": "logo", "type": "command", "exec": "omacvm-logo", "interval": 5, "tooltip": "The Mac's logo",
-    "onClick": "bash -c '[[ $(omacvm-logo) == breathe* ]] && omacvm-logo auto || omacvm-logo breathe'" }
+  { "id": "logo", "type": "command", "exec": "omacvm-logo", "interval": 30, "tooltip": "The Mac's logo",
+    "onClick": "[[ $(omacvm-logo) == breathe* ]] && omacvm-logo auto || omacvm-logo breathe" }
   ```
 
 - **How it works.** The VM only names a mode; the Bridge checks it and plays
