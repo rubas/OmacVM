@@ -1509,6 +1509,18 @@ int main(void) {
     check(!nDockEv && gotFrames > 10 && gotLifts == 1, "follow: Magic Mouse, the guest's way: virtual fingers to the guest as before");
     guestLine(clients[0].fd, g0, "E right left");
 
+    // macOS lands the Space change about a second after the lift. Fingers down again before
+    // that (the next swipe, which macOS goes on with) take the Space over: no step, no miss.
+    double va = verifyAfter; verifyAfter = 0.2;
+    dockFollow = 0; nDockEv = 0; keys = spaceKeys = 0;
+    padSwipe(3, 0.6, 0.3, 30); pad(0, 0, 0);
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.02, false);   // the lift handled: capture off, the landing check waits
+    pad(3, 0.5, 0.5); pad(0, 0, 0); settleSteps(); guestGot();
+    check(dockLast() == kSwipeEnded && !spaceKeys && world[0].cur == 102 && !capturing && dockFollows && !dockMisses && !missFlipped &&
+          gotFrames == 0, "follow: fingers down again before macOS's Space change landed: theirs, no step of ours and no miss");
+    verifyAfter = va; dockFollow = 1;
+    settle(vm, NET_APP); press(K, HID, 0); settle(vm, NET_APP); guestGot(); takeLook();
+
     // macOS does not follow (a finished swipe does not change the Space): the one step after
     // all; twice in a row: the one step from then on, no Dock swipe.
     dockFollow = 0; nDockEv = 0; keys = spaceKeys = 0;

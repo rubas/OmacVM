@@ -252,6 +252,7 @@ static int tpW = 15600, tpH = 9600;   // built-in trackpad, 1/100 mm
 static FILE *rec;                 // --record: trackpad frames and macOS's scroll, for analysis
 static double unixNow(void) { return CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970; }
 static volatile int fingers;      // contacts in the touching trackpad's last frame
+static volatile double padDownAt = -1;   // when three or more fingers last came down on it (takeClock)
 // macOS's Three Finger Drag as last read (threeDragLook): 1 = three fingers on
 // a trackpad drag in macOS, so a three-finger touch stays macOS's.
 static volatile int threeDrag;
@@ -419,6 +420,7 @@ static int touching(const MTTouch *t) { return t->state >= 1 && t->state <= 5 &&
 // Swipe out that follows the fingers (below, with the swipe out): what
 // becomes of this trackpad frame (TK_*), and the frames held back meanwhile.
 static int takePadFrame(MTTouch **c, int k);
+static double takeClock(void);
 static int keepFrame(const char *line, size_t len);
 static void takePadPass(void);
 static void flushKept(void);
@@ -448,6 +450,7 @@ static int frameCb(MTDeviceRef dev, MTTouch *touches, int n, double ts, int fram
 
   int send = 0;
   if (k != 2) pinchSent = 0;
+  if (k >= 3 && fingers < 3) padDownAt = takeClock();
   fingers = k;
   if (rec && k > 0) {
     float sx = 0, sy = 0;
@@ -2821,6 +2824,7 @@ typedef struct {
   int on, follows, toward;
   int sign;                 // the progress's way: 1 (macOS 27's HID event) or swipeSign, at the start
   double began, unit;       // unit: the Dock's progress for one Space there
+  double ended;             // the lift (takeClock)
   CGPoint at;
   TakeDisplay d;
 } TakeRun;
@@ -2964,6 +2968,15 @@ static void takeEnded(TakeRun r, int commit, double progress, double speed) {
 static void takeLanded(TakeRun r, int looks) {
   DisplaySpaces ds[MAX_DISPLAYS]; int nd = spacesFn(ds, MAX_DISPLAYS);
   const DisplaySpaces *d = displayIn(ds, nd, r.d.id);
+  // macOS lands a Space change only once its slide has settled, about a
+  // second after the lift. Fingers that come down before that are the user's
+  // next swipe, which macOS goes on with from our slide: the Space is theirs,
+  // so no step of ours, and no miss.
+  if (d && d->current == r.d.vmSpace && padDownAt > r.ended) {
+    pthread_mutex_lock(&takeLock); takeRun.on = 0; pthread_mutex_unlock(&takeLock);
+    logf_("swipe out: fingers down again before macOS's Space change landed: theirs from here");
+    return;
+  }
   if (d && d->current == r.d.vmSpace && looks < LATE_LOOKS) { afterLook(^{ takeLanded(r, looks + 1); }); return; }
   pthread_mutex_lock(&takeLock); takeRun.on = 0; pthread_mutex_unlock(&takeLock);
   if (!d) { logf_("swipe out: the display is gone"); return; }
@@ -3021,6 +3034,7 @@ static void takeAct(SwipeTake *s, int tk, const char *who) {
     int commit = takeRun.follows ? s->commit : s->along >= TAKE_STEP_MIN && s->speed > TAKE_BACK;
     if (takeRun.follows) dockPostFn(commit ? kSwipeEnded : kSwipeCancelled, takeUnits(s->progress), takeUnits(s->speed), takeRun.at);
     takeQuietUntil = monoNow() + TAKE_QUIET;
+    takeRun.ended = now;
     TakeRun r = takeRun;
     double progress = s->progress, speed = s->speed;
     dispatch_async(dispatch_get_main_queue(), ^{ takeEnded(r, commit, progress, speed); });
