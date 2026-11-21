@@ -81,7 +81,7 @@ enum KeyAccess {
     static var missingText: String {
         let app = (Bundle.main.bundlePath as NSString).abbreviatingWithTildeInPath
         let id = Bundle.main.bundleIdentifier ?? "org.omacvm.app"
-        return "Without it, ⌘ Tab, ⌘ Space and ⌘ ⇧ 4 go to macOS instead of Omarchy. Input Monitoring is not enough.\n\n1. Allow… clears what macOS kept for an older OmacVM build (OmacVM can show as on and still not count) and opens System Settings › Privacy & Security › \(listName).\n2. Turn OmacVM on there. This note turns grey by itself.\n3. Quit the VM and start it again.\n\nStill red: select OmacVM there, remove it with −, add \(app) with + and turn it on. Or in Terminal: tccutil reset PostEvent \(id)"
+        return "Without it, ⌘ Tab, ⌘ Space and ⌘ ⇧ 4 go to macOS instead of Omarchy. Input Monitoring is not enough.\n\n1. Allow… clears what macOS kept for an older OmacVM build (OmacVM can show as on and still not count) and opens System Settings › Privacy & Security › \(listName). macOS lists OmacVM there, switched off.\n2. Turn OmacVM on there. This note turns grey by itself.\n3. Quit the VM and start it again.\n\nStill red: select OmacVM there, remove it with −, add \(app) with + and turn it on. Or in Terminal: tccutil reset PostEvent \(id)"
     }
 
     /// macOS keeps "control the computer" (kTCCServicePostEvent) as an entry
@@ -113,9 +113,8 @@ enum KeyAccess {
     /// it, and a reset would take that grant away). Else an old "control the
     /// computer" entry goes first; with Accessibility on that is all (allowed
     /// at once, no prompt). Else Accessibility's own entry may be an old one
-    /// too: it goes as well, then macOS's prompt for "control the computer"
-    /// (once per app; it lists OmacVM under Accessibility, switched off) and
-    /// the Accessibility pane. `post` is macOS's answer now (`fresh`), never
+    /// too: it goes as well, then macOS's request of Accessibility (`ask`:
+    /// it lists OmacVM there, switched off) and the Accessibility pane. `post` is macOS's answer now (`fresh`), never
     /// this process's kept one, and only its no resets an entry: without an
     /// answer Allow… does nothing. The parts are passed in for the test.
     static func allow(reset: (String) -> Void, post: () -> Bool?, ask: () -> Void) {
@@ -126,6 +125,24 @@ enum KeyAccess {
         ask()
     }
 
+    /// The request that lists OmacVM under `listName`, switched off, with
+    /// macOS's prompt: Accessibility's own (kTCCServiceAccessibility), whose
+    /// grant also gives "control the computer". CGRequestPostEventAccess asks
+    /// for kTCCServicePostEvent alone, which no list shows: on macOS 27.2 it
+    /// left no entry anywhere, and OmacVM had to be added with +. It returns
+    /// at once, and shows nothing once Accessibility is on.
+    static func ask() {
+        _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+    }
+
+    /// At each start of a VM while macOS refuses the tap: the request alone,
+    /// so OmacVM is in the list before anyone opens its window. No reset: a
+    /// start never takes an entry away. It holds no start: QEMU starts
+    /// without the tap and takes it at the next start after the switch.
+    static func askAtStart(allowed: Bool, ask: () -> Void) {
+        if !allowed { ask() }
+    }
+
     /// Allow… in the window; macOS's answers and tccutil off the main
     /// thread, then `done`.
     static func request(done: @escaping @MainActor () -> Void) {
@@ -134,7 +151,7 @@ enum KeyAccess {
             allow(reset: reset, post: fresh, ask: { ask = true })
             DispatchQueue.main.async {
                 if ask {
-                    _ = CGRequestPostEventAccess()
+                    KeyAccess.ask()
                     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
                         NSWorkspace.shared.open(url)
                     }
@@ -147,7 +164,8 @@ enum KeyAccess {
     /// Once per app run, when the note would be red: an old "control the
     /// computer" entry goes without a click (only this app's own entry, and
     /// only while macOS refuses). With Accessibility on the note goes away;
-    /// else nothing changes (QEMU does not ask at start: only Allow… asks).
+    /// else nothing changes (QEMU does not ask at start: the app does,
+    /// `askAtStart`, and Allow… does).
     private static var clearedOnce = false   // main thread only
     static func clearOldEntryOnce(done: @escaping @MainActor () -> Void) {
         guard !clearedOnce else { return }

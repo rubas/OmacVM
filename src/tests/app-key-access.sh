@@ -28,6 +28,10 @@ case "allow":   // a[2]: macOS's answer at each check in turn, such as refused,a
     KeyAccess.allow(reset: { steps.append("reset \($0)") }, post: { steps.append("check"); return answers.removeFirst() },
                     ask: { steps.append("ask") })
     print(steps.joined(separator: ", "))
+case "start":   // a[2]: macOS's answer for this process: refused, allowed
+    var steps: [String] = []
+    KeyAccess.askAtStart(allowed: a[2] == "allowed", ask: { steps.append("ask") })
+    print(steps.joined(separator: ", "))
 case "clear":   // a[2]: macOS's answer now: refused, allowed, none (no answer)
     var steps: [String] = []
     KeyAccess.clearOldEntry(reset: { steps.append("reset \($0)") },
@@ -76,12 +80,18 @@ expect "Allow…, still refused: both entries go, then macOS asks" "check, reset
 expect "Red note, refused now: the old entry goes by itself" "check, reset PostEvent" "$("$T/key-access" clear refused)"
 expect "Red note, no answer from macOS: no reset by itself" "check" "$("$T/key-access" clear none)"
 expect "Red note, allowed now: no reset by itself" "check" "$("$T/key-access" clear allowed)"
+# A VM start asks too while macOS refuses, so OmacVM is in the list by itself
+# (macOS 27.2: after Allow… with CGRequestPostEventAccess, OmacVM was in no
+# list, and had to be added with +). It never resets an entry.
+expect "VM start, refused: macOS is asked, nothing is reset" "ask" "$("$T/key-access" start refused)"
+expect "VM start, allowed: nothing" "" "$("$T/key-access" start allowed)"
 # What the window asks for: what QEMU's active tap needs ("control the
 # computer", the Accessibility pane), not Input Monitoring.
 src=$R/app/app/Sources/OmacVM/KeyAccess.swift
 has() { if grep -qF "$2" "$src"; then echo "ok   $1"; else echo "FAIL $1"; fail=1; fi; }
 hasnt() { if grep -qF "$2" "$src"; then echo "FAIL $1"; fail=1; else echo "ok   $1"; fi; }
-has "Allow… asks for control the computer" '_ = CGRequestPostEventAccess()'
+has "Allow… asks with the request that lists OmacVM under Accessibility" '_ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)'
+hasnt "... not with the one that no list shows" 'CGRequestPostEventAccess()'
 has "... and opens Accessibility" 'Privacy_Accessibility'
 hasnt "... not Input Monitoring" 'CGRequestListenEventAccess'
 hasnt "... nor its pane" 'Privacy_ListenEvent'
@@ -95,6 +105,8 @@ has "... and only that (not Input Monitoring)" 'KeyNote.decide(allowedNow: allow
 src=$R/app/app/Sources/OmacVM/main.swift
 has "the new process asks control the computer" 'print(CGPreflightPostEventAccess() ? "1" : "0")'
 hasnt "... not Input Monitoring there either" 'CGPreflightListenEventAccess() ? "1"'
+src=$R/app/app/Sources/OmacVM/Runner.swift
+has "a VM start asks while macOS refuses" 'KeyAccess.askAtStart(allowed: KeyAccess.allowed, ask: KeyAccess.ask)'
 src=$R/app/app/Sources/OmacVM/SettingsRows.swift
 has "... and so does the (i) of an allowed row" 'Privacy & Security › \(KeyAccess.listName).'
 has "a red note clears an old entry once by itself" 'KeyAccess.clearOldEntryOnce'
