@@ -14,6 +14,13 @@ in more words.
   Center out of sight for about a second to read the list or switch, and keys typed during that
   second do not reach the VM. The panel reads the AirPlay list each time it opens. It is also
   calmer: no status line and no numbers beside the sliders. It needs the app update and Update VM.
+- **Headphone modes in the Audio panel.** When AirPods or other supported headphones are the Mac's
+  output, the Audio panel shows their macOS modes under their row in the Mac's own words and
+  language. On AirPods Pro, you get Listening Mode (Transparency, Adaptive, Noise Cancellation),
+  Spatial Audio, and Conversation Awareness. The panel hides a group when macOS offers none of its
+  options, and dims any unavailable option inside a shown group. Click to switch, or pick with h and
+  l and press Enter. This uses the same Control Center access as AirPlay, so the same Accessibility
+  permission and one-second keyboard pause apply. It needs the app update and Update VM.
 
 ## 3.5.1
 

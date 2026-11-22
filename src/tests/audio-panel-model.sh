@@ -1,8 +1,9 @@
 #!/bin/bash
 # The audio panel's output list (src/bridge/plugins/omacvm.audio/Model.js):
-# which of the outputs macOS lists are AirPlay speakers, and which row has the
-# checkmark. On the payloads of a Mac mini with a Studio
-# Display XDR and a HomePod called Living Room (2026-11-20).
+# which of the outputs macOS lists are AirPlay speakers, which row has the
+# checkmark, which row has the modes of headphones, and where the cursor
+# stops. On the payloads of a Mac mini with a Studio Display XDR, a HomePod
+# called Living Room and AirPods Pro (2026-11-20).
 #   src/tests/audio-panel-model.sh
 set -euo pipefail
 cd "$(dirname "$0")/../bridge/plugins/omacvm.audio"
@@ -59,6 +60,46 @@ withHeadset.devices.push({ name: "Headset", selected: false })
 l = M.outputLists(onDisplay, bluetooth, withHeadset)
 expect(same(names(l.outputs), ["Studio Display XDR Speakers*", "Mac mini Speakers", "Headset"]) && l.outputs[2].picker && same(names(l.airplay), ["Living Room"]),
   "a paired headset that is not connected is an output, not an AirPlay speaker")
+// AirPods Pro as the output (2026-11-20): CoreAudio and macOS's list name them alike, and the list has their modes.
+const pods = { uid: "48-A9-1C-63-0F-2A:output", name: "AirPods Pro - Find My", transport: "bluetooth", has_output: true, has_input: false, default_output: true, default_input: false }
+const onPods = { output: pods, devices: [pods, Object.assign({}, display, { default_output: false }), mic, mini] }
+const option = (title, selected, enabled) => ({ title: title, selected: selected, enabled: enabled !== false })
+const modes = [{ title: "Listening Mode", options: [option("Transparency", true), option("Adaptive", false), option("Noise Cancellation", false)] },
+  { title: "Spatial Audio", options: [option("Not Available", true, false)] },
+  { title: "Conversation Awareness", options: [option("Off", true), option("On", false)] }]
+const podsListed = (output, selected) => ({ accessibility: true, devicesOutput: output, devices: [
+  { name: "Mac mini Speakers", selected: false }, { name: "Studio Display XDR Speakers", selected: !selected },
+  { name: "AirPods Pro - Find My", selected: selected, modes: modes }, { name: "Living Room", selected: false }] })
+const groups = rows => rows.map(r => r.name + ":" + (r.modes || []).map(g => g.title).join("/"))
+
+l = M.outputLists(onPods, bluetooth, podsListed(pods.uid, true))
+expect(same(groups(l.outputs), ["AirPods Pro - Find My:Listening Mode/Conversation Awareness", "Studio Display XDR Speakers:", "Mac mini Speakers:"])
+  && same(names(l.airplay), ["Living Room"]),
+  "the AirPods play: their row, once, has macOS's groups of modes, and no other row has any; Spatial Audio, whose one option macOS does not offer, is not shown")
+const noneOffered = podsListed(pods.uid, true)
+noneOffered.devices[2] = Object.assign({}, noneOffered.devices[2], { modes: [modes[1]] })
+expect(!M.outputLists(onPods, bluetooth, noneOffered).outputs[0].modes, "AirPods with no option offered at all: no modes under their row")
+expect(same(groups(M.outputLists(onPods, bluetooth, podsListed("AppleUSBAudioEngine:display:10,11", false)).outputs)[0], "AirPods Pro - Find My:"),
+  "a list read for another output: no modes, as nobody knows them for the AirPods now")
+const podsIdle = Object.assign({}, pods, { default_output: false })
+l = M.outputLists({ output: display, devices: [podsIdle, display, mic, mini] }, bluetooth, podsListed(display.uid, false))
+expect(same(groups(l.outputs), ["AirPods Pro - Find My:", "Studio Display XDR Speakers:", "Mac mini Speakers:"]),
+  "the display plays and the AirPods are connected: no modes under any row")
+
+l = M.outputLists(onPods, bluetooth, podsListed(pods.uid, true))
+const stops = M.outputStops(l.outputs, l.airplay)
+expect(same(stops.map(s => s.row.name + (s.group ? " > " + s.group.title : "")),
+  ["AirPods Pro - Find My", "AirPods Pro - Find My > Listening Mode", "AirPods Pro - Find My > Conversation Awareness",
+   "Studio Display XDR Speakers", "Mac mini Speakers", "Living Room"]),
+  "the cursor: the AirPods' row, a stop per group under it, then the other rows")
+expect(same([l.outputs[0].stop, l.outputs[0].modes.map(g => g.stop), l.airplay[0].stop], [0, [1, 2], 5]),
+  "each row and group knows its stop")
+const listening = l.outputs[0].modes[0]
+expect(M.optionCursor(listening, -1, 0) === 0 && M.optionCursor(listening, 0, 1) === 1 && M.optionCursor(listening, 2, 1) === 2 && M.optionCursor(listening, 0, -1) === 0,
+  "on Listening Mode the cursor lands on Transparency, which macOS selected, and h/l walk the options and stop at the ends")
+const someOff = { title: "Spatial Audio", options: [option("Off", false), option("Fixed", true, false), option("Head Tracked", false)] }
+expect(M.optionCursor(someOff, -1, 0) === 0 && M.optionCursor(someOff, 0, 1) === 2,
+  "an option macOS does not offer is never under the cursor, also when it is selected")
 process.exit(failed ? 1 : 0)
 JS
 echo "audio-panel-model: all passed"
