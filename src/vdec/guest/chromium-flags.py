@@ -178,9 +178,11 @@ def off():
         value = ADD.get(switch)
         if not value:
             continue
-        if how.startswith("line "):
+        if how.startswith("line ") and how[5:] in ls:
             ls = [l for l in ls if l != how[5:]]
             continue
+        # Added to the user's switch, or to the line it made that has another
+        # value now (scroll momentum puts its feature into the last one too).
         hit = last_switch(ls, switch)
         if hit:
             i, m = hit

@@ -6,7 +6,9 @@
 #    Chromium-based apps), loaded from hyprland.lua;
 #  * --disable-smooth-scrolling in Chromium's and Chrome's flags files, so
 #    Chromium does not animate on top of macOS's momentum (tested with it);
-#  * WaylandUnscaledTouchpadScrolling in their last --disable-features (below).
+#  * WaylandUnscaledTouchpadScrolling in their last --disable-features, so
+#    Chromium scrolls a touchpad at the scale its factor is tuned for
+#    (glide-flags.py).
 #    Only files that exist; markers remember which ones OmacVM changed, so
 #    turning Glide off never removes a flag the user set.
 set -euo pipefail
@@ -18,52 +20,6 @@ HY=$H/.config/hypr
 LINE='require("hypr.omacvm_glide")'
 MARK=$H/.local/state/omacvm/glide-flags
 FLAG=--disable-smooth-scrolling
-# Chromium's field trial config (Chrome for Testing applies it, 158 measured)
-# turns WaylandUnscaledTouchpadScrolling on: a touchpad then scrolls 2.5 pixels
-# per unit of the compositor instead of 12, and the page moves a fifth of what
-# omacvm_glide.lua's factor for Chromium is tuned for. So Glide turns it off.
-# Chromium keeps only its last --disable-features, so the feature goes into
-# that one, or into a new line after /etc's list for Chromium, whose launcher
-# reads /etc/chromium-flags.conf first.
-FEATURE=WaylandUnscaledTouchpadScrolling
-FMARK=$H/.local/state/omacvm/glide-features
-ETC_FLAGS=/etc/chromium-flags.conf
-# disabled add FEATURE [LIST] | remove FEATURE | list: the flags file on stdin
-# with FEATURE in Chromium's last --disable-features (a new line with LIST
-# first when there is none), or out of every --disable-features, or that last
-# list. Status 1 when nothing changes.
-disabled() {
-  python3 -I -c '
-import re, sys
-mode, feat = sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else ""
-lines = sys.stdin.read().splitlines()
-tok = re.compile(r"(?<!\S)--disable-features=(\S*)")
-hits = [(i, m) for i, l in enumerate(lines) if not l.lstrip().startswith("#") for m in tok.finditer(l)]
-vals = lambda m: [v for v in m.group(1).split(",") if v]
-if mode == "list":
-    print(",".join(vals(hits[-1][1])) if hits else "")
-    sys.exit(0)
-if mode == "add":
-    if hits and feat in vals(hits[-1][1]):
-        sys.exit(1)
-    if hits:
-        i, m = hits[-1]
-        lines[i] = lines[i][:m.start()] + "--disable-features=" + ",".join(vals(m) + [feat]) + lines[i][m.end():]
-    else:
-        first = [v for v in (sys.argv[3] if len(sys.argv) > 3 else "").split(",") if v and v != feat]
-        lines.append("--disable-features=" + ",".join(first + [feat]))
-else:
-    hits = [(i, m) for i, m in hits if feat in vals(m)]
-    if not hits:
-        sys.exit(1)
-    for i, m in reversed(hits):
-        rest = [v for v in vals(m) if v != feat]
-        lines[i] = lines[i][:m.start()] + ("--disable-features=" + ",".join(rest) if rest else "") + lines[i][m.end():]
-    emptied = {i for i, _ in hits if not lines[i].strip()}
-    lines = [l for i, l in enumerate(lines) if i not in emptied]
-sys.stdout.write("".join(l + "\n" for l in lines))
-' "$@"
-}
 # Hyprland's config is touched (and reloaded below) only when it changes: a
 # reload moves the displays, a flicker on every apply.
 changed=0
@@ -80,19 +36,11 @@ if [[ $ON == on ]]; then
   home_mkdir "$(dirname "$MARK")"
   for f in "$H/.config/chromium-flags.conf" "$H/.config/chrome-flags.conf" "$H/.config/brave-flags.conf"; do
     [[ -f $f ]] || continue
-    if ! home_grep "$f" -qxF -- "$FLAG"; then
-      printf '%s\n' "$FLAG" | home_append "$f"
-      home_grep "$MARK" -qxF "$f" || echo "$f" | home_append "$MARK"
-    fi
-    first=
-    [[ $f == */chromium-flags.conf && -r $ETC_FLAGS ]] && first=$(disabled list < "$ETC_FLAGS")
-    t=$(mktemp)
-    if home_cat "$f" | disabled add "$FEATURE" "$first" > "$t"; then
-      home_write "$f" < "$t"
-      home_grep "$FMARK" -qxF "$f" || echo "$f" | home_append "$FMARK"
-    fi
-    rm -f "$t"
+    home_grep "$f" -qxF -- "$FLAG" && continue
+    printf '%s\n' "$FLAG" | home_append "$f"
+    home_grep "$MARK" -qxF "$f" || echo "$f" | home_append "$MARK"
   done
+  home_run python3 -I - on "$H" < glide-flags.py
   echo "scroll momentum: on (restart Chromium-based apps once)"
 else
   if home_grep "$HY/hyprland.lua" -qxF "$LINE" || [[ -e $HY/omacvm_glide.lua ]]; then
@@ -109,16 +57,7 @@ else
     done < <(home_cat "$MARK")
     home_run rm -f "$MARK"
   fi
-  if [[ -f $FMARK ]]; then
-    while IFS= read -r f; do
-      case $f in "$H/.config/chromium-flags.conf"|"$H/.config/chrome-flags.conf"|"$H/.config/brave-flags.conf") ;; *) continue ;; esac
-      [[ -f $f ]] || continue
-      t=$(mktemp)
-      home_cat "$f" | disabled remove "$FEATURE" > "$t" && home_write "$f" < "$t"
-      rm -f "$t"
-    done < <(home_cat "$FMARK")
-    home_run rm -f "$FMARK"
-  fi
+  home_run python3 -I - off "$H" < glide-flags.py
   echo "scroll momentum: off"
 fi
 # A running Hyprland picks the change up now.

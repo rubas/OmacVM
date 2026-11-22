@@ -132,7 +132,7 @@ for f in hyprland.lua input.lua autostart.lua monitor_workspaces.lua omacvm_glid
 done
 plant "$H/.config/hypr/bindings.lua" "$S/secret"
 plant "$H/.config/hypr/monitors.lua" "$S/secret"
-for f in glide-flags glide-features pending-plugins pending-plugins-off pending-clock restart-shell; do plant "$H/.local/state/omacvm/$f" "$S/file"; done
+for f in glide-flags glide-features.json pending-plugins pending-plugins-off pending-clock restart-shell; do plant "$H/.local/state/omacvm/$f" "$S/file"; done
 plant "$H/.config/chromium-flags.conf" "$S/file"
 plant "$H/.config/omarchy/shell.json" "$S/json"
 plant "$H/.config/omacvm/clock-before.json" "$S/secret"
