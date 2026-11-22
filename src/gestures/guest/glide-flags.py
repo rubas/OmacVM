@@ -33,9 +33,14 @@ def files(home):
 
 
 def lines(path):
+    with open(path) as f:
+        return f.read().splitlines()
+
+
+def etc_lines(path):
+    """An /etc file as the user's launcher reads it: none when it cannot."""
     try:
-        with open(path) as f:
-            return f.read().splitlines()
+        return lines(path) if path else []
     except (FileNotFoundError, PermissionError):
         return []
 
@@ -59,13 +64,17 @@ def write(path, text):
     may write there, else in place of the link. Keeps the file's mode."""
     for dest in (os.path.realpath(path), path):
         try:
-            mode = os.stat(dest).st_mode & 0o7777
+            mode = 0o644 if os.path.islink(dest) else os.stat(dest).st_mode & 0o7777
         except FileNotFoundError:
             mode = 0o644
+        if dest != path and os.path.exists(dest) and not os.access(dest, os.W_OK):
+            continue   # a read-only target: the link gives way
         try:
             fd, tmp = tempfile.mkstemp(dir=os.path.dirname(dest), prefix=".omacvm-")
-        except PermissionError:
-            continue
+        except OSError:   # a folder the user cannot write, or a read-only mount
+            if dest != path:
+                continue
+            raise
         try:
             with os.fdopen(fd, "w") as f:
                 f.write(text)
@@ -80,7 +89,6 @@ def write(path, text):
             except FileNotFoundError:
                 pass
             raise
-    raise PermissionError(f"cannot write {path}")
 
 
 def write_lines(path, ls):
@@ -93,7 +101,7 @@ def on(home, mark_path, mark):
             continue
         ls = lines(path)
         own = last(ls)
-        hit = own or (last(lines(etc)) if etc else None)
+        hit = own or last(etc_lines(etc))
         if hit and FEATURE in values(hit[1]):
             continue
         if own:
