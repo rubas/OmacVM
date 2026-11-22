@@ -162,6 +162,9 @@ jobs:
       - name: OmacVM.app sound delay for the VM (QEMU's part, the Mac's output, limits)
         working-directory: app/app
         run: swift run audio-tests
+      - name: OmacVM.app the Mac's sound for the VM (Control Center's lists as recorded, AirPods' modes too, the route's rules)
+        working-directory: app/app
+        run: swift run sound-tests
       - name: OmacVM.app AirPods and media controls (the port's lines, when the VM is Now Playing, a fuzz)
         working-directory: app/app
         run: swift run media-tests
@@ -682,6 +685,9 @@ jobs:
 
       - name: OmacVM's bar widgets and display panel read the bar's colours and font only through a guard (no TypeError lines when the shell reloads a plugin)
         run: src/tests/plugin-bar-null.sh
+
+      - name: The audio panel's output list (which outputs are AirPlay speakers, which row has the checkmark and the modes, where the cursor stops)
+        run: src/tests/audio-panel-model.sh
 
       - name: Per-display workspaces step aside on Omarchy 4.5 and keep the rest of bindings.lua
         run: src/tests/workspaces-45.sh

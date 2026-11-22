@@ -29,6 +29,22 @@ in more words.
   Change…); xfs cannot shrink. `omacvm check` has a "home disk" line. Only for VMs built here
   with the option: other VMs, prebuilt VMs and the app's own setup are as before; the steps for a
   VM you have are in docs/routes/app.md.
+- **AirPlay and balance in the Audio panel.** The Audio panel in Omarchy's bar now lists the Mac's
+  AirPlay speakers and TVs after the Mac's own outputs, so you can click to switch.
+  When the Mac's current output supports it, such as
+  headphones, the panel also shows a left/right Balance slider. AirPlay needs OmacVM allowed under
+  Accessibility on the Mac (System Settings → Privacy & Security → Accessibility), the same
+  permission Keyboard access already uses. Because macOS offers no other way, OmacVM opens Control
+  Center out of sight for about a second to read the list or switch, and keys typed during that
+  second do not reach the VM. The panel reads the AirPlay list each time it opens. It is also
+  calmer: no status line and no numbers beside the sliders. It needs the app update and Update VM.
+- **Headphone modes in the Audio panel.** When AirPods or other supported headphones are the Mac's
+  output, the Audio panel shows their macOS modes under their row in the Mac's own words and
+  language. On AirPods Pro, you get Listening Mode (Transparency, Adaptive, Noise Cancellation),
+  Spatial Audio, and Conversation Awareness. The panel hides a group when macOS offers none of its
+  options, and dims any unavailable option inside a shown group. Click to switch, or pick with h and
+  l and press Enter. This uses the same Control Center access as AirPlay, so the same Accessibility
+  permission and one-second keyboard pause apply. It needs the app update and Update VM.
 
 ## 3.5.1
 
