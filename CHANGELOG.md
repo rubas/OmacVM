@@ -5,6 +5,10 @@ in more words.
 
 ## Unreleased
 
+- **Scroll momentum: Chrome scrolls as far as macOS again.** Chromium's field trial config, which
+  Chrome for Testing applies, turns on `WaylandUnscaledTouchpadScrolling`, and a two-finger scroll
+  then moved the page a fifth of what macOS moves it. Scroll momentum now turns that feature off in
+  the flags files where it puts `--disable-smooth-scrolling` (restart Chromium once).
 - **Keyboard access: OmacVM is in the list by itself.** Allow… asked macOS with a request that no
   list of Privacy & Security shows (macOS 27.2: OmacVM was in no list, and had to be added with +).
   OmacVM now asks with Accessibility's own request, so macOS lists OmacVM under Accessibility
