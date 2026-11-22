@@ -7,7 +7,9 @@
 #  * apply.sh's choice of --only (its block, with stand-ins for SSH and the
 #    digests);
 #  * guest/install.sh's vulkan step keeps the driver timer in step;
-#  * glide.sh reloads Hyprland only when its config changed.
+#  * glide.sh reloads Hyprland only when its config changed;
+#  * glide.sh puts WaylandUnscaledTouchpadScrolling into Chromium's last
+#    --disable-features, and takes out only what it added.
 #   src/tests/feature-switch.sh
 set -uo pipefail
 R=$(cd "$(dirname "$0")/../.." && pwd)
@@ -117,7 +119,16 @@ chmod +x "$B"/*
 G=$T/src/gestures/guest; mkdir -p "$T/src/gestures" "$T/src/guest"; cp -R "$R/src/gestures/guest" "$G"
 cp "$R/src/guest/home-files.sh" "$T/src/guest/"
 sed -i.bak "s|^RUN=/run/user/\$(id -u \"\$U\")|RUN=$T/run|" "$G/glide.sh"
+sed -i.bak "s|^ETC_FLAGS=.*|ETC_FLAGS=$T/etc-chromium-flags.conf|" "$G/glide.sh"
 glide() { PATH="$B:$PATH" bash "$G/glide.sh" u "$1" >/dev/null 2>&1; echo $?; }
+# Chromium's flags without the switch (its launcher reads /etc's list first), Chrome's with two, Brave's
+# with the feature the user set.
+F=WaylandUnscaledTouchpadScrolling C=$T/home/.config
+printf -- '--disable-features=FromEtc\n' > "$T/etc-chromium-flags.conf"
+printf -- '--ozone-platform=wayland\n' > "$C/chromium-flags.conf"
+printf -- '--a --disable-features=First --b\n# --disable-features=Comment\n--disable-features=Last\n' > "$C/chrome-flags.conf"
+printf -- '--disable-features=%s\n' "$F" > "$C/brave-flags.conf"
+chrome_before=$(cat "$C/chrome-flags.conf")
 reloads() { [[ -f $T/reloads ]] && wc -l < "$T/reloads" | tr -d ' ' || echo 0; }
 expect "glide on: runs" 0 "$(glide on)"
 expect "glide on: Hyprland reloaded once" 1 "$(reloads)"
@@ -127,11 +138,24 @@ expect "glide on again: runs" 0 "$(glide on)"
 expect "glide on again: no reload" 1 "$(reloads)"
 expect "glide on again: the file is not rewritten" "$ino" "$(ls -i "$T/home/.config/hypr/omacvm_glide.lua" | awk '{print $1}')"
 expect "glide on again: hyprland.lua has it once" 1 "$(grep -cxF 'require("hypr.omacvm_glide")' "$T/home/.config/hypr/hyprland.lua")"
+expect "glide on: Chromium gets a line with /etc's list and the feature" "--disable-features=FromEtc,$F" \
+  "$(grep -- '--disable-features' "$C/chromium-flags.conf")"
+expect "glide on: Chrome's last switch takes the feature, the others stay" \
+  "--a --disable-features=First --b|# --disable-features=Comment|--disable-features=Last,$F" \
+  "$(grep -- '--disable-features' "$C/chrome-flags.conf" | paste -sd '|' -)"
+expect "glide on: Brave's own feature stays as it is, once" "--disable-features=$F" "$(grep -- '--disable-features' "$C/brave-flags.conf")"
+expect "glide on: only the files it changed are marked" "$C/chromium-flags.conf $C/chrome-flags.conf" \
+  "$(paste -sd ' ' - < "$T/home/.local/state/omacvm/glide-features")"
 if sed --version >/dev/null 2>&1; then   # GNU sed (the VM's): the off path's sed -i
   expect "glide off: runs" 0 "$(glide off)"
   expect "glide off: Hyprland reloaded" 2 "$(reloads)"
   expect "glide off: the line is gone" 0 "$(grep -cxF 'require("hypr.omacvm_glide")' "$T/home/.config/hypr/hyprland.lua")"
   expect "glide off again: no reload" 2 "$(glide off >/dev/null; reloads)"
+  expect "glide off: Chromium keeps /etc's list, without the feature" "--disable-features=FromEtc" \
+    "$(grep -- '--disable-features' "$C/chromium-flags.conf")"
+  expect "glide off: Chrome's flags as they were, but for the smooth scrolling flag" "$chrome_before" \
+    "$(grep -v -x -- '--disable-smooth-scrolling' "$C/chrome-flags.conf")"
+  expect "glide off: Brave's own feature stays" 1 "$(grep -c -- "--disable-features=$F" "$C/brave-flags.conf")"
 else
   rm -f "$T/home/.config/hypr/omacvm_glide.lua"
   printf '%s\n' '-- hyprland' > "$T/home/.config/hypr/hyprland.lua"
