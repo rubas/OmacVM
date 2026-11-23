@@ -149,6 +149,10 @@ Panel {
       root.askForList()
     }
     function onReadingChanged() { root.refreshDisplayModels() }
+    // Also when the app is free again: onAnswered starts the read only while
+    // Quickshell ends a process before the handler of its output runs, as
+    // 0.3.2 does. A second ask is harmless, as Sound.read refuses while busy.
+    function onBusyChanged() { root.askForList() }
   }
 
   function refreshDisplayModels() {
