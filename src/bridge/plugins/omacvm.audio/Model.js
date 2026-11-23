@@ -167,8 +167,9 @@ function optionCursor(group, from, delta) {
 // often keeps those modes closed, and a read on its way may have begun
 // before the headphones played.
 // asked: the uid of the output this opening last read the list for, "" after
-// a press of a row, or null before the opening's first read. Answers the uid
-// to read the list for now ("" without an output), or null: no read.
+// a press of a row answered, or null before the opening's first read.
+// Answers the uid to read the list for now ("" without an output), or null:
+// no read.
 function listRead(asked, output) {
   var uid = output ? String(output.uid || "") : ""
   if (asked === null) return uid

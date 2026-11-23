@@ -90,7 +90,8 @@ Panel {
   property int optionIndex: -1
 
   // The output the panel last read macOS's Sound list for in this opening,
-  // "" after a press of a row, or null before its first read (Model.listRead).
+  // "" after a press of a row answered, or null before its first read
+  // (Model.listRead).
   property var listOutput: null
   // The balance the app read for the output that plays now.
   readonly property bool showBalance: available && sound.available && !!sound.balance && !!output && output.uid === sound.output
@@ -140,15 +141,13 @@ Panel {
 
   Connections {
     target: sound
-    function onAnswered() {
+    function onAnswered(pressed) {
+      // Its list may lack the modes of headphones that play after it.
+      if (pressed) root.listOutput = ""
       root.refreshDisplayModels()
       root.askForList()
     }
     function onReadingChanged() { root.refreshDisplayModels() }
-    // The app is free again: a read the panel still wants starts now. In
-    // onAnswered the app still counts as busy, as Quickshell reports the
-    // process's end only after its output.
-    function onBusyChanged() { root.askForList() }
   }
 
   function refreshDisplayModels() {
@@ -392,9 +391,7 @@ Panel {
   function setDefaultOutput(row) {
     if (!row) return
     if (row.allow) { sound.allow(); return }
-    // The press answers with the list as it stands, where macOS may keep the
-    // modes of headphones closed: headphones that play after it get a read.
-    if (row.picker) { if (sound.press(row.name)) listOutput = ""; return }
+    if (row.picker) { sound.press(row.name); return }
     if (row.uid && !row.active) Quickshell.execDetached(["omacvm-bridge", "output", row.uid])
   }
 
