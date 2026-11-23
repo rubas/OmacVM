@@ -159,6 +159,24 @@ function optionCursor(group, from, delta) {
   return offered[Math.max(0, Math.min(offered.length - 1, at + (delta || 0)))]
 }
 
+// Whether the panel reads macOS's Sound list now, and for which output. A
+// read opens Control Center on the Mac for about a second, so the panel
+// reads once per opening, and once more when a Bluetooth output plays whose
+// modes its list may lack: only a read opens the modes of headphones such as
+// AirPods. A press of a row answers with the list as it stands, where macOS
+// often keeps those modes closed, and a read on its way may have begun
+// before the headphones played.
+// asked: the uid of the output this opening last read the list for, "" after
+// a press of a row answered with a list, or null before the opening's first
+// read.
+// Answers the uid to read the list for now ("" without an output), or null:
+// no read.
+function listRead(asked, output) {
+  var uid = output ? String(output.uid || "") : ""
+  if (asked === null) return uid
+  return output && output.transport === "bluetooth" && uid !== asked ? uid : null
+}
+
 // Why a read or a press of macOS's Sound list did not work, by the app's code.
 function soundFailureText(code) {
   if (code === "busy") return "Close Control Center and try again"
@@ -184,6 +202,7 @@ if (typeof module !== "undefined") {
     outputLists: outputLists,
     outputStops: outputStops,
     optionCursor: optionCursor,
+    listRead: listRead,
     soundFailureText: soundFailureText,
     clamp01: clamp01
   }
