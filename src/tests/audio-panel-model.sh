@@ -162,9 +162,9 @@ p.open(); p.free(); p.bridge(display); p.press(); p.free()
 expect(reads(p) === "Studio Display XDR Speakers", "the display plays: one read per opening, also after a press of an AirPlay speaker")
 // The promise of the panel's reads, on random orders of events: once the
 // app is free, the list has the modes of the Bluetooth output that plays;
-// and between two reads there is a reason for the second (an opening, a
-// press of a row that answered with a list, the Bridge's report of a
-// Bluetooth output), so no loop
+// each opening reads once; and between two reads there is a reason for the
+// second (an opening, a press of a row that answered with a list, the
+// Bridge's report of a Bluetooth output), so no loop
 // takes the Mac's keyboard over and over. The world around Model.listRead,
 // as the panel's handlers call it: openings and closings; the state request
 // of an opening before the app is known; the Mac's output, which changes by
@@ -192,7 +192,7 @@ function panelWorld(seed) {
   let s = seed >>> 0
   const rnd = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296 }
   const pick = a => a[Math.floor(rnd() * a.length)]
-  const w = { mac: pick(outputs), open: false, opening: 0, ready: false, stateJob: false, job: null, asked: null,
+  const w = { mac: pick(outputs), open: false, opening: 0, openingRead: false, ready: false, stateJob: false, job: null, asked: null,
     list: null, readFailed: false, disclosure: {}, reason: false, broke: "" }
   w.output = w.mac
   for (const o of outputs) w.disclosure[o.uid] = bt(o) && rnd() < 0.5
@@ -204,13 +204,13 @@ function panelWorld(seed) {
     if (!w.reason) w.broke = "a read without a reason"
     w.reason = false
     w.job = { kind: "read", for: uid, opening: w.opening }
-    w.asked = uid; w.readFailed = false
+    w.asked = uid; w.readFailed = false; w.openingRead = true
   }
   const look = j => { if (!j.seen) { j.seen = w.mac; if (j.kind === "mode" && j.seen !== j.device) j.refused = true } }
   const events = {
     open: () => {
       if (w.open) return
-      w.open = true; w.opening++; w.reason = true; w.asked = null; w.readFailed = false
+      w.open = true; w.opening++; w.openingRead = false; w.reason = true; w.asked = null; w.readFailed = false
       if (w.ready) ask(); else w.stateJob = true
     },
     close: () => { w.open = false },
@@ -244,7 +244,7 @@ function panelWorld(seed) {
         if (j.kind === "read" && bt(of)) w.disclosure[of.uid] = true
         w.list = { of: of, modes: w.disclosure[of.uid] }
         // Panel.qml's onAnswered: a press's list may lack the modes.
-        if (j.kind === "press") { w.asked = ""; w.reason = true }
+        if (j.kind === "press") { if (w.asked !== null) w.asked = ""; w.reason = true }
       }
       w.job = null
       ask()
@@ -264,6 +264,7 @@ function panelRun(seed, steps) {
     const failed = w.readFailed && w.asked === o.uid
     const otherList = w.asked === o.uid && !!w.list && w.list.of !== o
     if (settled && !hasModes && !failed && !otherList) w.broke = "no modes for " + o.name
+    if (w.open && w.ready && !w.job && !w.openingRead) w.broke = "an opening without its read"
   }
   return w.broke ? "seed " + seed + ": " + w.broke + " after " + trace.join(" ") : ""
 }
