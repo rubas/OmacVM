@@ -163,8 +163,9 @@ expect(reads(p) === "Studio Display XDR Speakers", "the display plays: one read 
 // The promise of the panel's reads, on random orders of events: once the
 // app is free, the list has the modes of the Bluetooth output that plays;
 // each opening reads once; and between two reads there is a reason for the
-// second (an opening, a press of a row that answered with a list, the
-// Bridge's report of a Bluetooth output), so no loop
+// second (an opening, the Bridge's report of a Bluetooth output, or a press
+// of a row that answered with a list while a Bluetooth output plays), so no
+// loop
 // takes the Mac's keyboard over and over. The world around Model.listRead,
 // as the panel's handlers call it: openings and closings; the state request
 // of an opening before the app is known; the Mac's output, which changes by
@@ -193,7 +194,7 @@ function panelWorld(seed) {
   const rnd = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296 }
   const pick = a => a[Math.floor(rnd() * a.length)]
   const w = { mac: pick(outputs), open: false, opening: 0, openingRead: false, ready: false, stateJob: false, job: null, asked: null,
-    list: null, readFailed: false, disclosure: {}, reason: false, broke: "" }
+    list: null, readFailed: false, disclosure: {}, reason: false, pressed: false, broke: "" }
   w.output = w.mac
   for (const o of outputs) w.disclosure[o.uid] = bt(o) && rnd() < 0.5
   // Panel.qml's askForList; Sound.qml's run takes one request at a time.
@@ -201,8 +202,8 @@ function panelWorld(seed) {
     if (!w.open || !w.ready) return
     const uid = M.listRead(w.asked, w.output)
     if (uid === null || w.job) return
-    if (!w.reason) w.broke = "a read without a reason"
-    w.reason = false
+    if (!w.reason && !(w.pressed && bt(w.output))) w.broke = "a read without a reason"
+    w.reason = false; w.pressed = false
     w.job = { kind: "read", for: uid, opening: w.opening }
     w.asked = uid; w.readFailed = false; w.openingRead = true
   }
@@ -244,7 +245,7 @@ function panelWorld(seed) {
         if (j.kind === "read" && bt(of)) w.disclosure[of.uid] = true
         w.list = { of: of, modes: w.disclosure[of.uid] }
         // Panel.qml's onAnswered: a press's list may lack the modes.
-        if (j.kind === "press") { if (w.asked !== null) w.asked = ""; w.reason = true }
+        if (j.kind === "press") { if (w.asked !== null) w.asked = ""; w.pressed = true }
       }
       w.job = null
       ask()
