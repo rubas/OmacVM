@@ -68,6 +68,12 @@ public final class SoundPicker {
         try session { details in try details.settledWithModes() }
     }
 
+    /// What the Sound module shows once its list is open, unchecked, for
+    /// `OmacVM --sound tree` (SoundWindow.shown).
+    public func tree() throws -> [SoundElement] {
+        try session { details in try details.shown() }.elements
+    }
+
     /// Presses the device's row as a click in Control Center does, and waits
     /// until macOS is done with it: the row's checkmark changed (macOS takes
     /// the old output's checkmark away first and sets the new one once the
@@ -259,6 +265,19 @@ extension SoundWindow {
             now = try read()
         }
         return SoundList.isList(now) ? now : try settled()
+    }
+
+    /// What the window shows once the list is open, for `OmacVM --sound
+    /// tree`: the list as a read has it, with the modes opened, or, when no
+    /// list this code reads stands there within the 3 s a read waits, the
+    /// window as it is then. Nothing in it is checked: the tree is for the
+    /// macOS whose list this code cannot read.
+    public func shown() throws -> [SoundElement] {
+        do {
+            return try settledWithModes()
+        } catch SoundPicker.Failure.unsupported(_) {
+            return try read()
+        }
     }
 
     /// The list once it stands, with the modes of the device that plays:

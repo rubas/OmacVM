@@ -193,12 +193,12 @@ public final class SoundService: @unchecked Sendable {
         }
     }
 
-    /// The list's elements as Accessibility gives them, one per line, for
-    /// `OmacVM --sound tree`: what to send along when a macOS shows a list
-    /// this code cannot read.
+    /// What the Sound module shows as Accessibility gives it, one element per
+    /// line, for `OmacVM --sound tree`: what to send along when a macOS
+    /// shows a list this code cannot read, so it is printed unchecked.
     public func tree() -> String {
         do {
-            return try picker.read().elements.map { e in
+            return try picker.tree().map { e in
                 String(repeating: "  ", count: e.depth)
                     + [e.role, e.subrole, e.identifier, e.description, e.value].joined(separator: "|") + (e.enabled ? "" : "|disabled")
             }.joined(separator: "\n")

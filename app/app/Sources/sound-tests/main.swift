@@ -104,6 +104,30 @@ expect(SoundList.closedDisclosure(closed).map { closed[$0].role } == "AXDisclosu
        "the AirPods play and their disclosure is closed: it is opened before a read; open: left alone")
 expect(SoundList.closedDisclosure(airPodsList(open: false, playing: "0")) == nil, "the closed disclosure of a device that does not play: left alone")
 
+// `OmacVM --sound tree` prints what Control Center shows (SoundWindow.shown),
+// played here through a window of recorded lists. A press of the disclosure
+// opens the AirPods' modes, as Control Center does.
+final class Recorded: SoundWindow {
+    var shows: [SoundElement]
+    let afterPress: [SoundElement]
+    init(_ shows: [SoundElement], afterPress: [SoundElement] = []) { self.shows = shows; self.afterPress = afterPress }
+    func read() -> [SoundElement] { shows }
+    func press(_ find: ([SoundElement]) -> Int?) throws {
+        guard find(shows) != nil else { throw SoundPicker.Failure.interrupted }
+        shows = afterPress
+    }
+}
+expect((try? Recorded(closed, afterPress: withAirPods).shown()) == withAirPods,
+       "the tree of a list this code reads: the list as a read gives it, with the AirPods' modes opened")
+// A macOS whose devices are radio buttons, not checkboxes (3 s: a read's wait for a list).
+let radios = list(display: "1", livingRoom: "0").map { e -> SoundElement in
+    var e = e
+    if e.identifier.hasPrefix("sound-device-") { e.role = "AXRadioButton" }
+    return e
+}
+expect(!SoundList.isList(radios) && (try? Recorded(radios).shown()) == radios,
+       "the tree of a list this code cannot read (its devices are radio buttons): the window as it is, not \"no list\"")
+
 let rowsNow = SoundList.rows(withAirPods)
 expect(SoundList.option(rowsNow, device: pods, group: "Conversation Awareness", option: "On") == SoundOption(title: "On", selected: false)
        && SoundList.option(rowsNow, device: pods, group: "Listening Mode", option: "On") == nil,
