@@ -90,8 +90,8 @@ Panel {
   property int optionIndex: -1
 
   // The output the panel last read macOS's Sound list for in this opening,
-  // "" after a press of a row answered, or null before its first read
-  // (Model.listRead).
+  // "" after a press of a row answered with a list, or null before its first
+  // read (Model.listRead).
   property var listOutput: null
   // The balance the app read for the output that plays now.
   readonly property bool showBalance: available && sound.available && !!sound.balance && !!output && output.uid === sound.output
@@ -142,8 +142,9 @@ Panel {
   Connections {
     target: sound
     function onAnswered(pressed) {
-      // Its list may lack the modes of headphones that play after it.
-      if (pressed) root.listOutput = ""
+      // Its list may lack the modes of headphones that play after it. A press
+      // of the last opening leaves this one's first read to come.
+      if (pressed && root.listOutput !== null) root.listOutput = ""
       root.refreshDisplayModels()
       root.askForList()
     }

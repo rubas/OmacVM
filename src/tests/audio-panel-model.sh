@@ -119,7 +119,7 @@ function panel(output) {
   p.bridge = o => { p.output = o; p.ask() }
   p.press = () => { start("press") }
   p.free = failed => {
-    if (p.job === "press" && !failed) p.asked = ""
+    if (p.job === "press" && !failed && p.asked !== null) p.asked = ""
     p.job = ""
     p.ask()
   }
@@ -153,6 +153,10 @@ p = panel(display)
 p.open(); p.bridge(pods); p.open(); p.free()
 expect(reads(p) === "Studio Display XDR Speakers, AirPods Pro - Find My",
   "opened again while the last opening's read is on its way: a read of its own once that one answered")
+p = panel(display)
+p.open(); p.free(); p.press(); p.open(); p.free()
+expect(reads(p) === "Studio Display XDR Speakers, Studio Display XDR Speakers",
+  "opened again while the last opening's press is on its way: the press's list leaves this opening's own read to come")
 p = panel(display)
 p.open(); p.free(); p.bridge(display); p.press(); p.free()
 expect(reads(p) === "Studio Display XDR Speakers", "the display plays: one read per opening, also after a press of an AirPlay speaker")
