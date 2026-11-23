@@ -89,8 +89,8 @@ Panel {
   // On a group of modes: the option under the cursor (h/l), pressed by Enter.
   property int optionIndex: -1
 
-  // The output the panel read macOS's Sound list for in this opening, or
-  // null before its first read (Model.listRead).
+  // The output the panel last read macOS's Sound list for in this opening,
+  // "" after a press of a row, or null before its first read (Model.listRead).
   property var listOutput: null
   // The balance the app read for the output that plays now.
   readonly property bool showBalance: available && sound.available && !!sound.balance && !!output && output.uid === sound.output
@@ -166,11 +166,9 @@ Panel {
   // for about a second; until it answers, the panel shows the list of the
   // last opening.
   function askForList() {
-    if (!opened || !available || !sound.available || !sound.accessibility || sound.busy) return
+    if (!opened || !available || !sound.available || !sound.accessibility) return
     var uid = Model.listRead(listOutput, output)
-    if (uid === null) return
-    listOutput = uid
-    sound.read()
+    if (uid !== null && sound.read()) listOutput = uid
   }
 
   function sectionCount(section) {
@@ -286,9 +284,7 @@ Panel {
 
   onOpenedChanged: {
     if (opened) {
-      // A read that the last opening asked for and that is still on its way
-      // counts for this one, for the output it was asked for.
-      if (!sound.reading) listOutput = null
+      listOutput = null
       // A list's answer has the state too. The state alone is asked while
       // the app is not known to answer or to be allowed, which may have
       // changed since.
@@ -396,7 +392,9 @@ Panel {
   function setDefaultOutput(row) {
     if (!row) return
     if (row.allow) { sound.allow(); return }
-    if (row.picker) { sound.press(row.name); return }
+    // The press answers with the list as it stands, where macOS may keep the
+    // modes of headphones closed: headphones that play after it get a read.
+    if (row.picker) { if (sound.press(row.name)) listOutput = ""; return }
     if (row.uid && !row.active) Quickshell.execDetached(["omacvm-bridge", "output", row.uid])
   }
 

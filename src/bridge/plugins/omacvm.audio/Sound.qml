@@ -55,9 +55,11 @@ Item {
     stateProc.running = true
   }
 
-  function read() { run(["read"], "", null) }
+  // read and press answer whether they asked the app: not while it is at
+  // the last request.
+  function read() { return run(["read"], "", null) }
 
-  function press(name) { run(["press", name], name, null) }
+  function press(name) { return run(["press", name], name, null) }
 
   // An option of a device's modes, by the titles macOS gave them.
   function mode(device, group, option) {
@@ -73,12 +75,13 @@ Item {
   }
 
   function run(words, name, mode) {
-    if (listProc.running) return
+    if (listProc.running) return false
     failure = ""
     pressing = name
     switching = mode
     listProc.command = command.concat(words, ["--json"])
     listProc.running = true
+    return true
   }
 
   function setBalance(v) {

@@ -161,15 +161,14 @@ function optionCursor(group, from, delta) {
 
 // Whether the panel reads macOS's Sound list now, and for which output. A
 // read opens Control Center on the Mac for about a second, so the panel
-// reads once per opening, and once more for each Bluetooth output that plays
-// and that this opening has not read the list for: only a read has the modes
-// of headphones such as AirPods. No other answer of the app stands in for
-// it. A press of their row answers with the list as it stands, where macOS
-// often keeps their modes closed, and a read on its way may have begun
-// before they played.
-// asked: the uid of the output this opening read the list for, or null: none
-// yet. Answers the uid to read the list for now ("" without an output), or
-// null: no read.
+// reads once per opening, and once more when a Bluetooth output plays whose
+// modes its list may lack: only a read opens the modes of headphones such as
+// AirPods. A press of a row answers with the list as it stands, where macOS
+// often keeps those modes closed, and a read on its way may have begun
+// before the headphones played.
+// asked: the uid of the output this opening last read the list for, "" after
+// a press of a row, or null before the opening's first read. Answers the uid
+// to read the list for now ("" without an output), or null: no read.
 function listRead(asked, output) {
   var uid = output ? String(output.uid || "") : ""
   if (asked === null) return uid

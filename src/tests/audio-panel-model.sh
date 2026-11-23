@@ -107,17 +107,15 @@ expect(M.optionCursor(someOff, -1, 0) === 0 && M.optionCursor(someOff, 0, 1) ===
 // closed until a read opens them.
 function panel(output) {
   const p = { output: output, asked: null, job: "", reads: [] }
+  // Sound's read and press start only while the app is free.
+  const start = job => { if (p.job) return false; p.job = job; return true }
   p.ask = () => {
-    if (p.job) return
     const uid = M.listRead(p.asked, p.output)
-    if (uid === null) return
-    p.asked = uid
-    p.reads.push(p.output ? p.output.name : "")
-    p.job = "read"
+    if (uid !== null && start("read")) { p.asked = uid; p.reads.push(p.output ? p.output.name : "") }
   }
-  p.open = () => { if (p.job !== "read") p.asked = null; p.ask() }
+  p.open = () => { p.asked = null; p.ask() }
   p.bridge = o => { p.output = o; p.ask() }
-  p.press = () => { p.job = "press" }
+  p.press = () => { if (start("press")) p.asked = "" }
   p.free = () => { p.job = ""; p.ask() }
   return p
 }
@@ -135,16 +133,17 @@ p.open(); p.bridge(pods); p.free()
 expect(reads(p) === "Studio Display XDR Speakers, AirPods Pro - Find My",
   "the AirPods begin to play while the opening's read is on its way: one more read once it answered")
 p.free(); p.bridge(display); p.bridge(pods); p.free()
-expect(p.reads.length === 2, "one read per output and opening: back on the display, then on the AirPods again, no more reads")
+expect(p.reads.length === 2, "one read per output: back on the display, then on the AirPods again, the list still has their modes")
 p.open(); p.free()
 expect(p.reads.length === 3, "the next opening reads once")
+p = panel(pods)
+p.open(); p.free(); p.press(); p.bridge(airplayDevice); p.free(); p.bridge(pods); p.free()
+expect(reads(p) === "AirPods Pro - Find My, AirPods Pro - Find My",
+  "from the AirPods to an AirPlay speaker and back through their own row: the speaker's list lacks their modes, so one more read")
 p = panel(display)
 p.open(); p.bridge(pods); p.open(); p.free()
 expect(reads(p) === "Studio Display XDR Speakers, AirPods Pro - Find My",
-  "opened again while the last opening's read for the display is on its way, on the AirPods: that read counts, and one more for the AirPods")
-p = panel(display)
-p.open(); p.open(); p.free()
-expect(p.reads.length === 1, "opened again while that read is on its way, on the same output: no second read")
+  "opened again while the last opening's read is on its way: a read of its own once that one answered")
 p = panel(display)
 p.open(); p.free(); p.bridge(display); p.press(); p.free()
 expect(reads(p) === "Studio Display XDR Speakers", "the display plays: one read per opening, also after a press of an AirPlay speaker")
