@@ -159,7 +159,8 @@ expect(reads(p) === "Studio Display XDR Speakers", "the display plays: one read 
 // The promise of the panel's reads, on random orders of events: once the
 // app is free, the list has the modes of the Bluetooth output that plays;
 // and between two reads there is a reason for the second (an opening, a
-// press of a row, the Bridge's report of a Bluetooth output), so no loop
+// press of a row that answered with a list, the Bridge's report of a
+// Bluetooth output), so no loop
 // takes the Mac's keyboard over and over. The world around Model.listRead,
 // as the panel's handlers call it: openings and closings; the state request
 // of an opening before the app is known; the Mac's output, which changes by
@@ -220,7 +221,6 @@ function panelWorld(seed) {
     press: () => {
       if (!w.open || !w.ready || w.job) return
       w.job = { kind: "press", target: pick([headset, airplayDevice]) }
-      w.asked = ""; w.reason = true
     },
     mode: () => {
       if (w.open && !w.job && bt(w.output) && w.list && w.list.of === w.output && w.list.modes) w.job = { kind: "mode", device: w.output }
@@ -239,6 +239,8 @@ function panelWorld(seed) {
         const of = j.kind === "read" ? j.seen : w.mac
         if (j.kind === "read" && bt(of)) w.disclosure[of.uid] = true
         w.list = { of: of, modes: w.disclosure[of.uid] }
+        // Panel.qml's onAnswered: a press's list may lack the modes.
+        if (j.kind === "press") { w.asked = ""; w.reason = true }
       }
       w.job = null
       ask()
