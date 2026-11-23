@@ -185,8 +185,8 @@ public final class SoundPicker {
         }
     }
 
-    /// The open list.
-    final class Details {
+    /// The open list, read and pressed through Accessibility.
+    final class Details: SoundWindow {
         let app: AXUIElement
         private var window: AXUIElement
         private let away: AXValue
@@ -213,52 +213,63 @@ public final class SoundPicker {
 
         func read() throws -> [SoundElement] { try scan().map(\.0) }
 
-        /// The list once it stands: two reads in a row agree, with the
-        /// list's title and a device in them.
-        func settled() throws -> [SoundElement] {
-            let end = ProcessInfo.processInfo.systemUptime + 3
-            var last: [SoundElement] = []
-            while ProcessInfo.processInfo.systemUptime < end {
-                let now = try read()
-                if SoundList.isList(now), now == last { return now }
-                last = now
-                usleep(60_000)
-            }
-            throw Failure.unsupported("the Sound module shows no list of devices that stands")
-        }
-
-        /// The list as `done` wants it, or as it stands after `limit`. A read
-        /// while Control Center rebuilds the list is no list and says nothing.
-        func wait(limit: Double, _ done: ([SoundElement]) -> Bool) throws -> [SoundElement] {
-            let end = ProcessInfo.processInfo.systemUptime + limit
-            var now = try read()
-            while !(SoundList.isList(now) && done(now)), ProcessInfo.processInfo.systemUptime < end {
-                usleep(60_000)
-                now = try read()
-            }
-            return SoundList.isList(now) ? now : try settled()
-        }
-
-        /// The list once it stands, with the modes of the device that plays:
-        /// its disclosure triangle is opened first when it is closed, as a
-        /// click would, and Control Center keeps it open from then on.
-        func settledWithModes() throws -> [SoundElement] {
-            let list = try settled()
-            guard SoundList.closedDisclosure(list) != nil else { return list }
-            try press(SoundList.closedDisclosure)
-            _ = try wait(limit: 2) { SoundList.closedDisclosure($0) == nil }
-            return try settled()
-        }
-
-        /// Presses the element that `find` points to in the list as it is
-        /// now: an element of an earlier read may be gone, as the list is
-        /// rebuilt after a press.
         func press(_ find: ([SoundElement]) -> Int?) throws {
             let now = try scan()
             guard let i = find(now.map(\.0)), AXUIElementPerformAction(now[i].1, kAXPressAction as CFString) == .success else {
                 throw Failure.interrupted
             }
         }
+    }
+}
+
+/// Control Center's window with the Sound module's list open. SoundPicker
+/// reads and presses it through Accessibility; sound-tests plays recorded
+/// lists through it.
+public protocol SoundWindow: AnyObject {
+    /// The window's elements now, in order.
+    func read() throws -> [SoundElement]
+    /// Presses the element that `find` points to in the list as it is now:
+    /// an element of an earlier read may be gone, as the list is rebuilt
+    /// after a press.
+    func press(_ find: ([SoundElement]) -> Int?) throws
+}
+
+extension SoundWindow {
+    /// The list once it stands: two reads in a row agree, with the
+    /// list's title and a device in them.
+    func settled() throws -> [SoundElement] {
+        let end = ProcessInfo.processInfo.systemUptime + 3
+        var last: [SoundElement] = []
+        while ProcessInfo.processInfo.systemUptime < end {
+            let now = try read()
+            if SoundList.isList(now), now == last { return now }
+            last = now
+            usleep(60_000)
+        }
+        throw SoundPicker.Failure.unsupported("the Sound module shows no list of devices that stands")
+    }
+
+    /// The list as `done` wants it, or as it stands after `limit`. A read
+    /// while Control Center rebuilds the list is no list and says nothing.
+    func wait(limit: Double, _ done: ([SoundElement]) -> Bool) throws -> [SoundElement] {
+        let end = ProcessInfo.processInfo.systemUptime + limit
+        var now = try read()
+        while !(SoundList.isList(now) && done(now)), ProcessInfo.processInfo.systemUptime < end {
+            usleep(60_000)
+            now = try read()
+        }
+        return SoundList.isList(now) ? now : try settled()
+    }
+
+    /// The list once it stands, with the modes of the device that plays:
+    /// its disclosure triangle is opened first when it is closed, as a
+    /// click would, and Control Center keeps it open from then on.
+    func settledWithModes() throws -> [SoundElement] {
+        let list = try settled()
+        guard SoundList.closedDisclosure(list) != nil else { return list }
+        try press(SoundList.closedDisclosure)
+        _ = try wait(limit: 2) { SoundList.closedDisclosure($0) == nil }
+        return try settled()
     }
 }
 
