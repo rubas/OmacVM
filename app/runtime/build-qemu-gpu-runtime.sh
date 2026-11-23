@@ -1315,6 +1315,10 @@ grep -q 'beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep
   die "ui/cocoa.m: QEMU's window process must not be napped (no-app-nap patch)"
 grep -qF 'registerDefaults:@{ @"NSAppSleepDisabled": @YES }' "$source_dir/ui/cocoa.m" || \
   die "ui/cocoa.m: QEMU's window process must opt out of App Nap (no-app-nap patch)"
+# OmacVM prototype (branch present-direct-surface, not for main as it is): the guest's
+# IOSurface scanout buffer as the layer's contents, no draw (OMACVM_GL_PRESENT_DIRECT=1 with
+# virgl's OMACVM_SCANOUT_IOSURFACE=1; both off by default).
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-present-direct.patch"
 
 virgl_root="$dependency_root/virglrenderer/$virgl_version"
 angle_root="$dependency_root/angle/$angle_version"
@@ -1952,6 +1956,9 @@ if grep -rnE --include='*.[ch]' --exclude=vkr_allocator.c --exclude-dir=venus-pr
      "$virgl_source/src/venus"; then
   die "src/venus: a proc table entry tested against NULL; entries are never NULL, use VKR_MISSING (missing-entries patch)"
 fi
+# OmacVM prototype (branch present-direct-surface): 8-bit scanout buffers as IOSurfaces
+# (OMACVM_SCANOUT_IOSURFACE=1, off by default), for omacvm-cocoa-present-direct.patch.
+patch -d "$virgl_source" -p1 -f -i "$native_dir/patches/virgl-scanout-iosurface.patch"
 # SPIRV-Tools' validator for Venus (virgl-venus-spirv-validate.patch): a static library with
 # hidden symbols, so libvirglrenderer exports none of them (MoltenVK carries a private copy of
 # its own), spirv-tools-*.patch applied; once more with AddressSanitizer for the CPU test.

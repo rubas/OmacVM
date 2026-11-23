@@ -1,0 +1,523 @@
+virglrenderer: scanout buffers as IOSurfaces (prototype, off by default)
+
+What: with OMACVM_SCANOUT_IOSURFACE=1, a single-level 8-bit BGRX/BGRA 2D
+buffer the guest makes for scanout (VIRGL_RES_BIND_SCANOUT) lives in an
+IOSurface bound as a RECTANGLE texture, so QEMU can put the buffer itself on
+the window (omacvm-cocoa-present-direct.patch) instead of drawing it into a
+present surface. Writes and framebuffer reads go to the IOSurface as before;
+samplers cannot read a RECTANGLE texture as 2D, so they read a 2D shadow,
+copied once per submit when a draw samples the buffer.
+The guest's page flip completes in the guest without waiting for the Mac, so
+the guest may draw into a buffer that is still on the window, queued in
+QEMU's present, or still held by WindowServer (it keeps the frame shown
+before the current one in use). A write into a buffer still in use
+(IOSurfaceIsInUse) moves the buffer to a free IOSurface (a spare, at most two
+per buffer) with its picture copied on the GPU, as Hyprland redraws only
+what changed. Only when no IOSurface is free does the write wait, at most
+25 ms. A plain wait stalled Hyprland's three-buffer swapchain at 60 frames a
+second (every third write waited the full 25 ms: WindowServer kept the
+buffer until a newer frame came, and the wait kept that frame from coming).
+stderr every 5 s: writes, waits, moves, shadow copies.
+Why: QEMU's present draw costs 0.45 ms of GPU per frame at 5K
+(docs/experiments/display-path.md, "Scanout zero copy: prototype").
+Limits: 8-bit SDR only (a 10-bit scanout stays a plain texture); up to two
+spare IOSurfaces per buffer (59 MB each at 5K).
+TODO(revert: prototype on branch present-direct-surface, not for main as it is).
+Upstream: not sent (macOS only).
+Tests: none at build time; VM A/B in docs/experiments/display-path.md.
+--- a/src/virglrenderer.h
++++ b/src/virglrenderer.h
+@@ -402,6 +402,10 @@
+ 
+ VIRGL_EXPORT int virgl_renderer_resource_get_info_ext(int res_handle,
+                                                       struct virgl_renderer_resource_info_ext *info);
++
++/* OmacVM (present-direct-surface prototype): the IOSurface a scanout buffer is made of
++ * (an IOSurfaceRef, not retained), or NULL. */
++VIRGL_EXPORT void *virgl_renderer_resource_get_iosurface(int res_handle);
+ 
+ VIRGL_EXPORT int virgl_renderer_borrow_texture_for_scanout(int res_handle,
+                                                            struct virgl_renderer_resource_info_ext *info);
+--- a/src/virglrenderer.c
++++ b/src/virglrenderer.c
+@@ -710,6 +710,15 @@
+    return 0;
+ }
+  
++void *virgl_renderer_resource_get_iosurface(int res_handle)
++{
++   struct virgl_resource *res = virgl_resource_lookup(res_handle);
++
++   if (!res || !res->pipe_resource)
++      return NULL;
++   return vrend_renderer_resource_scanout_iosurface(res->pipe_resource);
++}
++
+ int virgl_renderer_borrow_texture_for_scanout(int res_handle,
+                                               struct virgl_renderer_resource_info_ext *info)
+ {
+--- a/src/vrend/vrend_metal.h
++++ b/src/vrend/vrend_metal.h
+@@ -60,5 +60,9 @@
+  * BGRA8 texels (GL_RGBA8 with GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV), and tells its size
+  * in texels. */
+ bool virgl_metal_iosurface_bind_rect(void *iosurface, unsigned *width, unsigned *height);
++/* OmacVM (present-direct-surface prototype): a BGRA IOSurface for a scanout buffer, and
++ * whether something (Core Animation, WindowServer, QEMU's present queue) still uses it. */
++void *virgl_metal_scanout_iosurface_create(unsigned width, unsigned height);
++bool virgl_metal_iosurface_in_use(void *iosurface);
+ 
+ #endif
+--- a/src/vrend/vrend_metal.m
++++ b/src/vrend/vrend_metal.m
+@@ -329,6 +329,29 @@
+       CFRelease(iosurface);
+ }
+ 
++void *virgl_metal_scanout_iosurface_create(unsigned width, unsigned height)
++{
++   const int32_t values[4] = { (int32_t)width, (int32_t)height, 4, (int32_t)'BGRA' };
++   const void *keys[4] = { kIOSurfaceWidth, kIOSurfaceHeight, kIOSurfaceBytesPerElement,
++                           kIOSurfacePixelFormat };
++   CFNumberRef numbers[4];
++   for (int i = 0; i < 4; i++)
++      numbers[i] = CFNumberCreate(NULL, kCFNumberSInt32Type, &values[i]);
++   CFDictionaryRef props = CFDictionaryCreate(NULL, keys, (const void **)numbers, 4,
++                                              &kCFTypeDictionaryKeyCallBacks,
++                                              &kCFTypeDictionaryValueCallBacks);
++   IOSurfaceRef surface = IOSurfaceCreate(props);
++   CFRelease(props);
++   for (int i = 0; i < 4; i++)
++      CFRelease(numbers[i]);
++   return (void *)surface;
++}
++
++bool virgl_metal_iosurface_in_use(void *iosurface)
++{
++   return iosurface && IOSurfaceIsInUse((IOSurfaceRef)iosurface);
++}
++
+ bool virgl_metal_iosurface_bind_rect(void *iosurface, unsigned *width, unsigned *height)
+ {
+    IOSurfaceRef surface = (IOSurfaceRef)iosurface;
+--- a/src/vrend/vrend_renderer.h
++++ b/src/vrend/vrend_renderer.h
+@@ -142,6 +142,14 @@
+    uint32_t iosurface_row;   /* texels per row of the RECTANGLE texture */
+    uint32_t iosurface_first; /* the image's first texel in it */
+    int iosurface_mode;       /* how its pixels are laid out (vrend_blitter_restride) */
++   /* OmacVM (present-direct-surface prototype): a scanout buffer whose storage is an
++    * IOSurface (gl_id is its RECTANGLE texture), which QEMU shows as the window's
++    * contents without a copy. Samplers read scanout_shadow, a 2D copy made when a draw
++    * samples it (scanout_shadow_serial: once per submit). */
++   void *scanout_iosurface;
++   void *scanout_spare[2];   /* IOSurfaces the buffer moved out of (retained) */
++   GLuint scanout_shadow;
++   uint64_t scanout_shadow_serial;
+    /* OmacVM: index ranges of this buffer that indexed draws read back
+     * (virgl-index-range-cache.patch). content_gen counts the writes vrend makes to the
+     * buffer (vrend_resource_contents_changed); a range counts only for the generation it
+@@ -658,6 +666,7 @@
+                                       struct vrend_renderer_resource_info *info);
+ 
+ void vrend_renderer_borrow_texture_for_scanout(struct pipe_resource *pres);
++void *vrend_renderer_resource_scanout_iosurface(struct pipe_resource *pres);
+ 
+ void vrend_renderer_get_cap_set(uint32_t cap_set, uint32_t *max_ver,
+                                 uint32_t *max_size);
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -166,6 +166,12 @@
+ 
+ /* OmacVM: counts command buffers; a Venus image shown by copy is read at most once per buffer */
+ static uint64_t vrend_submit_serial = 1;
++#ifdef ENABLE_METAL
++/* OmacVM (present-direct-surface prototype): scanout buffers as IOSurfaces, below */
++static GLuint vrend_scanout_shadow(struct vrend_resource *res);
++static void vrend_scanout_shadow_refresh(struct vrend_resource *res, const GLint *swizzle);
++static bool vrend_scanout_write_hold(struct vrend_resource *res);
++#endif
+ 
+ /* Called by virgl_renderer_submit_cmd(2) around a context's command buffer. */
+ void vrend_renderer_submit_begin(void)
+@@ -3566,6 +3572,10 @@
+    vrend_resource_reference(&view->texture, res);
+ 
+    view->gl_id = view->texture->gl_id;
++#ifdef ENABLE_METAL
++   if (res->scanout_iosurface && view->target == GL_TEXTURE_2D)
++      view->gl_id = vrend_scanout_shadow(res);
++#endif
+ 
+    if (view->target == PIPE_BUFFER) {
+       view->target = view->texture->target;
+@@ -4199,6 +4209,13 @@
+       }
+    }
+ 
++#ifdef ENABLE_METAL
++   for (uint32_t i = 0; i < sub_ctx->nr_cbufs; i++) {
++      if (sub_ctx->surf[i] && vrend_scanout_write_hold(sub_ctx->surf[i]->texture))
++         vrend_hw_set_color_surface(sub_ctx, i);
++   }
++#endif
++
+    vrend_hw_emit_framebuffer_state(sub_ctx);
+ 
+    if (sub_ctx->nr_cbufs > 0 || sub_ctx->zsurf) {
+@@ -6935,6 +6952,9 @@
+       if (tview && tview->texture &&
+           (tview->texture->heap_reader || tview->texture->iosurface_data))
+          vrend_resource_heap_refresh(sub_ctx, tview->texture);
++      if (tview && tview->texture && tview->texture->scanout_iosurface &&
++          tview->gl_id == tview->texture->scanout_shadow)
++         vrend_scanout_shadow_refresh(tview->texture, tview->gl_swizzle);
+    }
+ #endif
+ 
+@@ -11487,6 +11507,260 @@
+ #endif
+ }
+ 
++#ifdef ENABLE_METAL
++/*
++ * OmacVM (present-direct-surface prototype, OMACVM_SCANOUT_IOSURFACE=1): a single-level
++ * 8-bit BGRA/BGRX 2D buffer the guest made for scanout lives in an IOSurface, bound as a
++ * RECTANGLE texture: everything that writes or reads it through framebuffers works as
++ * before, and QEMU puts the IOSurface itself on the window (no copy). Samplers cannot
++ * read a RECTANGLE texture as 2D, so they read a 2D shadow, copied when a draw samples
++ * the buffer. A write into the buffer waits (bounded) while Core Animation still shows
++ * it or QEMU's present queue holds it: the guest's page flip does not wait for the Mac.
++ */
++static int vrend_scanout_iosurface_on = -1;
++#define VREND_SCANOUT_HOLD_MAX_US 25000
++static struct {
++   uint64_t buffers, holds, timeouts, refreshes, writes, renames, spares;
++   uint64_t hold_us_sum, hold_us_max;
++   uint32_t hist[8];   /* holds of <0.1, <0.5, <1, <2, <4, <8, <16, >=16 ms */
++   uint64_t last_log_us;
++} vrend_scanout_stats;
++
++static uint64_t vrend_scanout_now_us(void)
++{
++   struct timespec t;
++   clock_gettime(CLOCK_MONOTONIC, &t);
++   return (uint64_t)t.tv_sec * 1000000 + t.tv_nsec / 1000;
++}
++
++static void vrend_scanout_stats_tick(void)
++{
++   uint64_t now = vrend_scanout_now_us();
++   if (!vrend_scanout_stats.last_log_us) {
++      vrend_scanout_stats.last_log_us = now;
++      return;
++   }
++   if (now - vrend_scanout_stats.last_log_us < 5000000)
++      return;
++   vrend_scanout_stats.last_log_us = now;
++   const uint32_t *h = vrend_scanout_stats.hist;
++   fprintf(stderr, "omacvm-scanout: %" PRIu64 " writes, %" PRIu64 " held (%" PRIu64 " us total, max %" PRIu64
++           " us; <0.1/0.5/1/2/4/8/16/more ms: %u/%u/%u/%u/%u/%u/%u/%u), %" PRIu64 " timeouts, %" PRIu64
++           " moved to another IOSurface (copied; %" PRIu64 " spares made in all), %" PRIu64
++           " shadow copies in 5 s\n",
++           vrend_scanout_stats.writes, vrend_scanout_stats.holds, vrend_scanout_stats.hold_us_sum,
++           vrend_scanout_stats.hold_us_max, h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7],
++           vrend_scanout_stats.timeouts, vrend_scanout_stats.renames, vrend_scanout_stats.spares,
++           vrend_scanout_stats.refreshes);
++   uint64_t buffers = vrend_scanout_stats.buffers, last = vrend_scanout_stats.last_log_us;
++   uint64_t spares = vrend_scanout_stats.spares;
++   memset(&vrend_scanout_stats, 0, sizeof(vrend_scanout_stats));
++   vrend_scanout_stats.buffers = buffers;
++   vrend_scanout_stats.spares = spares;
++   vrend_scanout_stats.last_log_us = last;
++}
++
++static bool vrend_scanout_iosurface_alloc(struct vrend_resource *gr, enum virgl_formats format)
++{
++   const struct pipe_resource *pr = &gr->base;
++
++   if (vrend_scanout_iosurface_on < 0) {
++      const char *e = getenv("OMACVM_SCANOUT_IOSURFACE");
++      vrend_scanout_iosurface_on = e && !strcmp(e, "1");
++      if (vrend_scanout_iosurface_on)
++         fprintf(stderr, "omacvm-scanout: 8-bit scanout buffers are IOSurfaces (OMACVM_SCANOUT_IOSURFACE=1)\n");
++   }
++   if (!vrend_scanout_iosurface_on || !(pr->bind & VIRGL_RES_BIND_SCANOUT) ||
++       pr->target != PIPE_TEXTURE_2D || pr->last_level != 0 || pr->nr_samples > 1 ||
++       pr->array_size > 1 || pr->depth0 != 1 || !pr->width0 || !pr->height0 ||
++       pr->width0 > 16384 || pr->height0 > 16384 ||
++       (format != VIRGL_FORMAT_B8G8R8X8_UNORM && format != VIRGL_FORMAT_B8G8R8A8_UNORM))
++      return false;
++
++   void *surface = virgl_metal_scanout_iosurface_create(pr->width0, pr->height0);
++   if (!surface)
++      return false;
++   GLuint tex;
++   unsigned w, h;
++   glGenTextures(1, &tex);
++   glBindTexture(GL_TEXTURE_RECTANGLE, tex);
++   if (!virgl_metal_iosurface_bind_rect(surface, &w, &h) || w != pr->width0 || h != pr->height0) {
++      glBindTexture(GL_TEXTURE_RECTANGLE, 0);
++      glDeleteTextures(1, &tex);
++      virgl_metal_iosurface_release(surface);
++      fprintf(stderr, "omacvm-scanout: a %ux%u IOSurface could not be bound: a plain texture\n",
++              pr->width0, pr->height0);
++      return false;
++   }
++   glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++   glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++   glBindTexture(GL_TEXTURE_RECTANGLE, 0);
++   gr->gl_id = tex;
++   gr->target = GL_TEXTURE_RECTANGLE;
++   gr->storage_bits &= ~VREND_STORAGE_GL_IMMUTABLE;
++   gr->storage_bits |= VREND_STORAGE_GL_TEXTURE;
++   gr->scanout_iosurface = surface;
++   if (vrend_scanout_stats.buffers++ < 8)
++      fprintf(stderr, "omacvm-scanout: buffer %ux%u %s y_0_top %d is an IOSurface\n", pr->width0,
++              pr->height0, util_format_name(pr->format), gr->y_0_top);
++   return true;
++}
++
++/* The 2D copy samplers read (made the first time, empty until refreshed). */
++static GLuint vrend_scanout_shadow(struct vrend_resource *res)
++{
++   if (!res->scanout_shadow) {
++      GLint bound = 0;
++      glGetIntegerv(GL_TEXTURE_BINDING_2D, &bound);
++      glGenTextures(1, &res->scanout_shadow);
++      glBindTexture(GL_TEXTURE_2D, res->scanout_shadow);
++      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, res->base.width0, res->base.height0, 0,
++                   GL_BGRA, GL_UNSIGNED_BYTE, NULL);
++      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
++      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
++      glBindTexture(GL_TEXTURE_2D, bound);
++   }
++   return res->scanout_shadow;
++}
++
++/* A draw samples the buffer: copy it into the shadow (once per submit). GL state kept. */
++static void vrend_scanout_shadow_refresh(struct vrend_resource *res, const GLint *swizzle)
++{
++   GLuint shadow = vrend_scanout_shadow(res);
++   if (res->scanout_shadow_serial != vrend_submit_serial) {
++      res->scanout_shadow_serial = vrend_submit_serial;
++      GLint rfb = 0, dfb = 0;
++      GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
++      GLuint fb[2];
++      glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
++      glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &dfb);
++      glGenFramebuffers(2, fb);
++      glBindFramebuffer(GL_READ_FRAMEBUFFER, fb[0]);
++      glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_RECTANGLE,
++                             res->gl_id, 0);
++      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb[1]);
++      glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, shadow, 0);
++      if (scissor)
++         glDisable(GL_SCISSOR_TEST);
++      glBlitFramebuffer(0, 0, res->base.width0, res->base.height0, 0, 0, res->base.width0,
++                        res->base.height0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
++      if (scissor)
++         glEnable(GL_SCISSOR_TEST);
++      glBindFramebuffer(GL_READ_FRAMEBUFFER, rfb);
++      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dfb);
++      glDeleteFramebuffers(2, fb);
++      vrend_scanout_stats.refreshes++;
++   }
++   if (swizzle) {
++      GLint bound = 0;
++      glGetIntegerv(GL_TEXTURE_BINDING_2D, &bound);
++      glBindTexture(GL_TEXTURE_2D, shadow);
++      for (unsigned c = 0; c < 4; ++c)
++         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R + c, swizzle[c]);
++      glBindTexture(GL_TEXTURE_2D, bound);
++   }
++   vrend_scanout_stats_tick();
++}
++
++/*
++ * The buffer still in use moves to a free IOSurface (a spare, or a new one: at most two
++ * per buffer) with its picture copied on the GPU: the guest draws only what changed into
++ * its buffers. GL state kept. False when no IOSurface is free.
++ */
++static bool vrend_scanout_move(struct vrend_resource *res)
++{
++   int k;
++   for (k = 0; k < 2; k++) {
++      if (!res->scanout_spare[k]) {
++         res->scanout_spare[k] = virgl_metal_scanout_iosurface_create(res->base.width0,
++                                                                      res->base.height0);
++         vrend_scanout_stats.spares += res->scanout_spare[k] != NULL;
++      }
++      if (res->scanout_spare[k] && !virgl_metal_iosurface_in_use(res->scanout_spare[k]))
++         break;
++   }
++   if (k == 2)
++      return false;
++   void *from = res->scanout_iosurface, *to = res->scanout_spare[k];
++   GLint rfb = 0, dfb = 0, bound = 0;
++   GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
++   GLuint tex[2], fb[2];
++   unsigned w, h;
++   bool ok;
++   glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
++   glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &dfb);
++   glGetIntegerv(GL_TEXTURE_BINDING_RECTANGLE, &bound);
++   glGenTextures(2, tex);
++   glBindTexture(GL_TEXTURE_RECTANGLE, tex[0]);
++   ok = virgl_metal_iosurface_bind_rect(from, &w, &h);
++   glBindTexture(GL_TEXTURE_RECTANGLE, tex[1]);
++   ok = ok && virgl_metal_iosurface_bind_rect(to, &w, &h);
++   if (ok) {
++      glGenFramebuffers(2, fb);
++      glBindFramebuffer(GL_READ_FRAMEBUFFER, fb[0]);
++      glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_RECTANGLE, tex[0], 0);
++      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb[1]);
++      glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_RECTANGLE, tex[1], 0);
++      if (scissor)
++         glDisable(GL_SCISSOR_TEST);
++      glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
++      if (scissor)
++         glEnable(GL_SCISSOR_TEST);
++      glBindFramebuffer(GL_READ_FRAMEBUFFER, rfb);
++      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dfb);
++      glDeleteFramebuffers(2, fb);
++      /* the buffer's own texture now stands on the new IOSurface */
++      glBindTexture(GL_TEXTURE_RECTANGLE, res->gl_id);
++      ok = virgl_metal_iosurface_bind_rect(to, &w, &h);
++   }
++   glBindTexture(GL_TEXTURE_RECTANGLE, bound);
++   glDeleteTextures(2, tex);
++   if (!ok)
++      return false;
++   res->scanout_spare[k] = from;
++   res->scanout_iosurface = to;
++   vrend_scanout_stats.renames++;
++   return true;
++}
++
++/*
++ * The guest is about to write the buffer. Its page flip completed in the guest without
++ * waiting for the Mac, so the buffer may still be on the window, about to go there, or
++ * still held by WindowServer: move it to a free IOSurface (true), else wait until
++ * nothing uses it (at most 25 ms, then write).
++ */
++static bool vrend_scanout_write_hold(struct vrend_resource *res)
++{
++   if (!res || !res->scanout_iosurface)
++      return false;
++   vrend_scanout_stats.writes++;
++   if (virgl_metal_iosurface_in_use(res->scanout_iosurface) && vrend_scanout_move(res)) {
++      vrend_scanout_stats_tick();
++      return true;
++   }
++   if (virgl_metal_iosurface_in_use(res->scanout_iosurface)) {
++      uint64_t t0 = vrend_scanout_now_us(), dt = 0;
++      bool busy = true;
++      while (busy && dt < VREND_SCANOUT_HOLD_MAX_US) {
++         usleep(100);
++         busy = virgl_metal_iosurface_in_use(res->scanout_iosurface);
++         dt = vrend_scanout_now_us() - t0;
++      }
++      static const uint64_t edges[7] = { 100, 500, 1000, 2000, 4000, 8000, 16000 };
++      unsigned b = 0;
++      while (b < 7 && dt >= edges[b])
++         b++;
++      vrend_scanout_stats.hist[b]++;
++      vrend_scanout_stats.holds++;
++      vrend_scanout_stats.hold_us_sum += dt;
++      vrend_scanout_stats.hold_us_max = MAX2(vrend_scanout_stats.hold_us_max, dt);
++      vrend_scanout_stats.timeouts += busy;
++   }
++   vrend_scanout_stats_tick();
++   return false;
++}
++#endif
++
+ static int vrend_resource_alloc_texture(struct vrend_resource *gr,
+                                         enum virgl_formats format,
+                                         void *image_oes)
+@@ -11513,6 +11787,11 @@
+       image_oes = gr->egl_image;
+    }
+ 
++#ifdef ENABLE_METAL
++   if (!image_oes && vrend_scanout_iosurface_alloc(gr, format))
++      goto texture_made;
++#endif
++
+    gr->target = tgsitargettogltarget(pr->target, pr->nr_samples);
+    gr->storage_bits |= VREND_STORAGE_GL_TEXTURE;
+ 
+@@ -11689,6 +11968,9 @@
+ #endif
+    }
+ 
++#ifdef ENABLE_METAL
++texture_made:
++#endif
+    gt->state.max_lod = -1;
+    gt->cur_swizzle[0] = gt->cur_swizzle[1] = gt->cur_swizzle[2] = gt->cur_swizzle[3] = -1;
+    gt->cur_base = -1;
+@@ -12770,6 +13052,11 @@
+    if (res->iosurface_rect)
+       glDeleteTextures(1, &res->iosurface_rect);
+    virgl_metal_iosurface_release(res->iosurface);
++   if (res->scanout_shadow)
++      glDeleteTextures(1, &res->scanout_shadow);
++   virgl_metal_iosurface_release(res->scanout_iosurface);
++   virgl_metal_iosurface_release(res->scanout_spare[0]);
++   virgl_metal_iosurface_release(res->scanout_spare[1]);
+ #endif
+    free(res);
+ }
+@@ -15337,6 +15624,9 @@
+    }
+    vrend_video_ready(src_res);
+    vrend_video_ready(dst_res);
++#ifdef ENABLE_METAL
++   vrend_scanout_write_hold(dst_res);
++#endif
+ 
+    if (ctx->in_error)
+       return;
+@@ -17608,12 +17898,27 @@
+    elsize = util_format_get_blocksize(res->base.format);
+ 
+    info->tex_id = res->gl_id;
++#ifdef ENABLE_METAL
++   /* a 2D texture for QEMU's users that bind it so (stale: QEMU shows the IOSurface) */
++   if (res->scanout_iosurface)
++      info->tex_id = res->scanout_shadow;
++#endif
+    info->width = res->base.width0;
+    info->height = res->base.height0;
+    info->depth = res->base.depth0;
+    info->format = res->base.format;
+    info->flags = res->y_0_top ? VIRGL_RESOURCE_Y_0_TOP : 0;
+    info->stride = util_format_get_nblocksx(res->base.format, u_minify(res->base.width0, 0)) * elsize;
++}
++
++void *vrend_renderer_resource_scanout_iosurface(struct pipe_resource *pres)
++{
++#ifdef ENABLE_METAL
++   return ((struct vrend_resource *)pres)->scanout_iosurface;
++#else
++   (void)pres;
++   return NULL;
++#endif
+ }
+ 
+ void *
+@@ -17877,6 +18182,12 @@
+    struct vrend_texture *tex = (struct vrend_texture *)pres;
+    struct vrend_format_table *tex_conv = &tex_conv_table[tex->base.base.format];
+ 
++#ifdef ENABLE_METAL
++   if (tex->base.scanout_iosurface) {
++      vrend_scanout_shadow(&tex->base);
++      return;
++   }
++#endif
+    assert(tex->base.target == GL_TEXTURE_2D);
+    assert(!util_format_is_depth_or_stencil(tex->base.base.format));
+ 
