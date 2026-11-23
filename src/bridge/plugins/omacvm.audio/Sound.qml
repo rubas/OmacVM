@@ -46,8 +46,9 @@ Item {
 
   readonly property var command: ["/usr/bin/env", "/usr/local/bin/omacvm", "sound"]
 
-  // The app answered or failed to; list: with macOS's Sound list.
-  signal answered(bool list)
+  // The app answered or failed to; pressed: a press of a row answered with the
+  // list as it stands, where macOS may keep the modes of headphones closed.
+  signal answered(bool pressed)
 
   function refresh() {
     if (stateProc.running) return
@@ -55,7 +56,8 @@ Item {
     stateProc.running = true
   }
 
-  function read() { run(["read"], "", null) }
+  // Whether it asked the app: not while the app is at the last request.
+  function read() { return run(["read"], "", null) }
 
   function press(name) { run(["press", name], name, null) }
 
@@ -73,12 +75,13 @@ Item {
   }
 
   function run(words, name, mode) {
-    if (listProc.running) return
+    if (listProc.running) return false
     failure = ""
     pressing = name
     switching = mode
     listProc.command = command.concat(words, ["--json"])
     listProc.running = true
+    return true
   }
 
   function setBalance(v) {
@@ -120,6 +123,7 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        var pressed = sound.pressing !== ""
         sound.failure = sound.take(text)
         sound.pressing = ""
         sound.switching = null
@@ -127,7 +131,7 @@ Item {
         // macOS took the grant away meanwhile: no message, the state says so.
         if (sound.failure === "accessibility") sound.failure = ""
         if (sound.failure !== "") failureClear.restart()
-        sound.answered(!failed)
+        sound.answered(pressed && !failed)
         // Without a list the state alone: the output and its balance now.
         if (failed) sound.refresh()
       }
