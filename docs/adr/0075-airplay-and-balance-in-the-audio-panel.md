@@ -129,8 +129,10 @@ beside the sliders and one output list:
   connected (the Bridge's Bluetooth list has its name) stands among the
   outputs. Both are switched by a press.
 - The panel asks for the list once each time it opens, as the Mac's own
-  module does, and once more when Bluetooth headphones become the output
-  while it is open, once per output, for their modes; never on a timer. Until the answer it shows the list of
+  module does, and once more for the modes of Bluetooth headphones that play
+  while it is open: when its last read was for another output, and after a
+  press of a row, whose answer may have their modes closed; never on a
+  timer. Until the answer it shows the list of
   the last opening. The cost is the owner's choice: for about a second after
   the panel opens, the Mac's keyboard is Control Center's.
 - The speaker's own row has the checkmark, as on the Mac. CoreAudio's one
@@ -140,8 +142,8 @@ beside the sliders and one output list:
   they were read for, and AirPlay gets a new one each time it connects).
 - The request on its way is the row's spinner; the checkmark is macOS's.
 - The output that plays has its modes under its row, from a list read for
-  it (so the panel reads the list once more when Bluetooth headphones
-  become the output while it is open, once per output and opening): per group macOS's title, quiet, and its options in one line on the
+  it (so the panel reads the list once more for Bluetooth headphones that
+  play while it is open, as above): per group macOS's title, quiet, and its options in one line on the
   edge of the row's name, as a segmented control without borders
   (Omarchy's Button), wrapped when they do not fit. The selected option has
   the fill and the weight of the output that plays; one macOS does not offer

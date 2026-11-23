@@ -46,8 +46,9 @@ Item {
 
   readonly property var command: ["/usr/bin/env", "/usr/local/bin/omacvm", "sound"]
 
-  // The app answered or failed to.
-  signal answered()
+  // The app answered or failed to; pressed: a press of a row answered with the
+  // list as it stands, where macOS may keep the modes of headphones closed.
+  signal answered(bool pressed)
 
   function refresh() {
     if (stateProc.running) return
@@ -55,11 +56,10 @@ Item {
     stateProc.running = true
   }
 
-  // read and press answer whether they asked the app: not while it is at
-  // the last request.
+  // Whether it asked the app: not while the app is at the last request.
   function read() { return run(["read"], "", null) }
 
-  function press(name) { return run(["press", name], name, null) }
+  function press(name) { run(["press", name], name, null) }
 
   // An option of a device's modes, by the titles macOS gave them.
   function mode(device, group, option) {
@@ -113,7 +113,7 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         if (sound.take(text) !== "") sound.available = false
-        sound.answered()
+        sound.answered(false)
       }
     }
   }
@@ -123,6 +123,7 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        var pressed = sound.pressing !== ""
         sound.failure = sound.take(text)
         sound.pressing = ""
         sound.switching = null
@@ -130,7 +131,7 @@ Item {
         // macOS took the grant away meanwhile: no message, the state says so.
         if (sound.failure === "accessibility") sound.failure = ""
         if (sound.failure !== "") failureClear.restart()
-        sound.answered()
+        sound.answered(pressed && !failed)
         // Without a list the state alone: the output and its balance now.
         if (failed) sound.refresh()
       }

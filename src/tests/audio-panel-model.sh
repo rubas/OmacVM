@@ -102,8 +102,8 @@ expect(M.optionCursor(someOff, -1, 0) === 0 && M.optionCursor(someOff, 0, 1) ===
   "an option macOS does not offer is never under the cursor, also when it is selected")
 // The panel's reads of macOS's Sound list. Each event below calls Panel.qml's
 // askForList as the panel's handlers do (an opening, the Bridge's report of
-// the output, the app free again after a read or a press); it reads only
-// while the app is free. On the AirPods Pro above, whose modes macOS keeps
+// the output, the app's answer to a read or a press); it reads only while
+// the app is free. On the AirPods Pro above, whose modes macOS keeps
 // closed until a read opens them.
 function panel(output) {
   const p = { output: output, asked: null, job: "", reads: [] }
@@ -115,8 +115,12 @@ function panel(output) {
   }
   p.open = () => { p.asked = null; p.ask() }
   p.bridge = o => { p.output = o; p.ask() }
-  p.press = () => { if (start("press")) p.asked = "" }
-  p.free = () => { p.job = ""; p.ask() }
+  p.press = () => { start("press") }
+  p.free = failed => {
+    if (p.job === "press" && !failed) p.asked = ""
+    p.job = ""
+    p.ask()
+  }
   return p
 }
 const reads = p => p.reads.join(", ")
@@ -140,6 +144,9 @@ p = panel(pods)
 p.open(); p.free(); p.press(); p.bridge(airplayDevice); p.free(); p.bridge(pods); p.free()
 expect(reads(p) === "AirPods Pro - Find My, AirPods Pro - Find My",
   "from the AirPods to an AirPlay speaker and back through their own row: the speaker's list lacks their modes, so one more read")
+p = panel(pods)
+p.open(); p.free(); p.press(); p.free(true)
+expect(reads(p) === "AirPods Pro - Find My", "a press that fails while the AirPods play: no read, and the failure's line stays")
 p = panel(display)
 p.open(); p.bridge(pods); p.open(); p.free()
 expect(reads(p) === "Studio Display XDR Speakers, AirPods Pro - Find My",
