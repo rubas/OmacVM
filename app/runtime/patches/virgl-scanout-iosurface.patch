@@ -20,8 +20,16 @@ buffer until a newer frame came, and the wait kept that frame from coming).
 stderr every 5 s: writes, waits, moves, shadow copies.
 Why: QEMU's present draw costs 0.45 ms of GPU per frame at 5K
 (docs/experiments/display-path.md, "Scanout zero copy: prototype").
-Limits: 8-bit SDR only (a 10-bit scanout stays a plain texture); up to two
-spare IOSurfaces per buffer (59 MB each at 5K).
+Limits (review of the prototype): 8-bit SDR only (a 10-bit scanout stays a
+plain texture); up to two spare IOSurfaces per buffer (59 MB each at 5K) and
+the shadow, none of them charged to the guest's memory budget; only a new
+framebuffer state and a blit into the buffer are checked (a draw through a
+framebuffer left bound, a clear, a copy or an upload write as they are), and
+a timed-out wait writes anyway; a move re-points the texture in place, so
+another context's framebuffer keeps the old IOSurface until it is set again;
+the shadow is refreshed once per submit and takes the last view's swizzle;
+the shader blitter still samples such a buffer as 2D; internal copies run
+under the guest's conditional rendering.
 TODO(revert: prototype on branch present-direct-surface, not for main as it is).
 Upstream: not sent (macOS only).
 Tests: none at build time; VM A/B in docs/experiments/display-path.md.
@@ -140,7 +148,17 @@ Tests: none at build time; VM A/B in docs/experiments/display-path.md.
  
  /* Called by virgl_renderer_submit_cmd(2) around a context's command buffer. */
  void vrend_renderer_submit_begin(void)
-@@ -3566,6 +3572,10 @@
+@@ -1658,7 +1664,8 @@
+ 
+ static void vrend_destroy_sampler_view(struct vrend_sampler_view *samp)
+ {
+-   if (samp->texture->gl_id != samp->gl_id)
++   /* OmacVM: a view of a scanout IOSurface reads its shadow, which the resource owns */
++   if (samp->texture->gl_id != samp->gl_id && samp->gl_id != samp->texture->scanout_shadow)
+       glDeleteTextures(1, &samp->gl_id);
+    vrend_resource_reference(&samp->texture, NULL);
+    free(samp);
+@@ -3566,6 +3573,10 @@
     vrend_resource_reference(&view->texture, res);
  
     view->gl_id = view->texture->gl_id;
@@ -151,7 +169,7 @@ Tests: none at build time; VM A/B in docs/experiments/display-path.md.
  
     if (view->target == PIPE_BUFFER) {
        view->target = view->texture->target;
-@@ -4199,6 +4209,13 @@
+@@ -4199,6 +4210,13 @@
        }
     }
  
@@ -165,7 +183,7 @@ Tests: none at build time; VM A/B in docs/experiments/display-path.md.
     vrend_hw_emit_framebuffer_state(sub_ctx);
  
     if (sub_ctx->nr_cbufs > 0 || sub_ctx->zsurf) {
-@@ -6935,6 +6952,9 @@
+@@ -6935,6 +6953,9 @@
        if (tview && tview->texture &&
            (tview->texture->heap_reader || tview->texture->iosurface_data))
           vrend_resource_heap_refresh(sub_ctx, tview->texture);
@@ -175,10 +193,12 @@ Tests: none at build time; VM A/B in docs/experiments/display-path.md.
     }
  #endif
  
-@@ -11487,6 +11507,260 @@
+@@ -11485,8 +11506,262 @@
+    (void)format;
+    (void)gr;
  #endif
- }
- 
++}
++
 +#ifdef ENABLE_METAL
 +/*
 + * OmacVM (present-direct-surface prototype, OMACVM_SCANOUT_IOSURFACE=1): a single-level
@@ -393,8 +413,8 @@ Tests: none at build time; VM A/B in docs/experiments/display-path.md.
 +   res->scanout_iosurface = to;
 +   vrend_scanout_stats.renames++;
 +   return true;
-+}
-+
+ }
+ 
 +/*
 + * The guest is about to write the buffer. Its page flip completed in the guest without
 + * waiting for the Mac, so the buffer may still be on the window, about to go there, or
@@ -436,7 +456,7 @@ Tests: none at build time; VM A/B in docs/experiments/display-path.md.
  static int vrend_resource_alloc_texture(struct vrend_resource *gr,
                                          enum virgl_formats format,
                                          void *image_oes)
-@@ -11513,6 +11787,11 @@
+@@ -11513,6 +11788,11 @@
        image_oes = gr->egl_image;
     }
  
@@ -448,7 +468,7 @@ Tests: none at build time; VM A/B in docs/experiments/display-path.md.
     gr->target = tgsitargettogltarget(pr->target, pr->nr_samples);
     gr->storage_bits |= VREND_STORAGE_GL_TEXTURE;
  
-@@ -11689,6 +11968,9 @@
+@@ -11689,6 +11969,9 @@
  #endif
     }
  
@@ -458,7 +478,7 @@ Tests: none at build time; VM A/B in docs/experiments/display-path.md.
     gt->state.max_lod = -1;
     gt->cur_swizzle[0] = gt->cur_swizzle[1] = gt->cur_swizzle[2] = gt->cur_swizzle[3] = -1;
     gt->cur_base = -1;
-@@ -12770,6 +13052,11 @@
+@@ -12770,6 +13053,11 @@
     if (res->iosurface_rect)
        glDeleteTextures(1, &res->iosurface_rect);
     virgl_metal_iosurface_release(res->iosurface);
@@ -470,7 +490,7 @@ Tests: none at build time; VM A/B in docs/experiments/display-path.md.
  #endif
     free(res);
  }
-@@ -15337,6 +15624,9 @@
+@@ -15337,6 +15625,9 @@
     }
     vrend_video_ready(src_res);
     vrend_video_ready(dst_res);
@@ -480,7 +500,7 @@ Tests: none at build time; VM A/B in docs/experiments/display-path.md.
  
     if (ctx->in_error)
        return;
-@@ -17608,12 +17898,27 @@
+@@ -17608,12 +17899,27 @@
     elsize = util_format_get_blocksize(res->base.format);
  
     info->tex_id = res->gl_id;
@@ -508,7 +528,7 @@ Tests: none at build time; VM A/B in docs/experiments/display-path.md.
  }
  
  void *
-@@ -17877,6 +18182,12 @@
+@@ -17877,6 +18183,12 @@
     struct vrend_texture *tex = (struct vrend_texture *)pres;
     struct vrend_format_table *tex_conv = &tex_conv_table[tex->base.base.format];
  

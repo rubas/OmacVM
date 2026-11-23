@@ -6,11 +6,10 @@ as an IOSurface (virgl-scanout-iosurface.patch, OMACVM_SCANOUT_IOSURFACE=1),
 a frame goes on the layer as that buffer: no draw into the present's
 surfaces. It waits for the guest's GPU work as a drawn frame waits for the
 draw (a fence after the guest's flush) and takes the vsync queue like any
-frame. Frames that must be drawn (the boot logo, extra brightness, 10-bit,
-part of the buffer, a size the surfaces do not have yet, upside down, the
-buffer shown last flushed again, the tiled present) are drawn from the
-IOSurface as a RECTANGLE texture; the partial present then draws them in
-full. The buffer is tagged sRGB as the present's surfaces are. DisplayGLTexture
+frame. Frames that must be drawn (extra brightness, part of the buffer, a
+size the surfaces do not have yet, upside down, the buffer shown last flushed
+again, the tiled present) are drawn from the IOSurface as a RECTANGLE
+texture; the partial present then draws them in full. The buffer is tagged sRGB as the present's surfaces are. DisplayGLTexture
 carries the IOSurface (virtio-gpu-virgl.c asks virgl for it).
 qemu.log every 5 s: "cocoa: present-direct: direct N, <reason> M ...".
 Test hook OMACVM_TEST_PACE_CHECK=1 (with pace2.html: tests/graphics/pacing's
@@ -22,8 +21,14 @@ flips are logged for key latency.
 Why: the present's draw is 0.45 ms of GPU per frame at 5K, 120 frames a
 second (54 ms/s); WindowServer shows a full-screen IOSurface without
 compositing either way.
-Limits: no extra brightness for such buffers (drawn without the gain);
-8-bit SDR only.
+Limits (review of the prototype): with extra brightness on, such frames are
+drawn wrong (sRGB values into linear surfaces, midtones too bright); a
+second output's window and the CAOpenGLLayer path still bind the borrowed
+2D texture, a stale shadow for these buffers; the fence that gates a direct
+frame is made in QEMU's present context, so it covers the guest's GPU work
+only as far as Apple's GL orders contexts of one share group (the drawn
+present's copy relies on the same); a failed RECTANGLE draw still queues
+its frame. 8-bit SDR only.
 TODO(revert: prototype on branch present-direct-surface, not for main as it is).
 Upstream: not sent (OmacVM's IOSurface present).
 Tests: VM A/B in docs/experiments/display-path.md.
@@ -38,7 +43,7 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
  } PresentFrame;
  
  static struct {
-@@ -10220,6 +10221,297 @@
+@@ -10220,6 +10221,296 @@
  }
  
  /* QEMU thread, BQL held. Returns false when nothing could be shown. */
@@ -47,15 +52,14 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
 + * scanout buffer that virgl made as an IOSurface (OMACVM_SCANOUT_IOSURFACE=1), a frame
 + * the guest flipped to goes on the layer as that buffer: no draw. virgl holds the
 + * guest's next write into a buffer while anything still uses it (vrend_scanout_write_hold).
-+ * Frames that must be drawn (the boot logo, extra brightness, 10-bit, part of the buffer,
-+ * scaled, upside down, the buffer shown last flushed again) are drawn from the IOSurface
-+ * as a RECTANGLE texture. TODO(revert: prototype only, not for main as it is).
++ * Frames that must be drawn (extra brightness, part of the buffer, scaled, upside down,
++ * the buffer shown last flushed again, tiles) are drawn from the IOSurface as a
++ * RECTANGLE texture. TODO(revert: prototype only, not for main as it is).
 + */
-+enum { PD_DIRECT, PD_SPLASH, PD_BRIGHT, PD_DEEP, PD_REGION, PD_SCALED, PD_UPSIDE,
-+       PD_SAME, PD_TILES, PD_N };
++enum { PD_DIRECT, PD_BRIGHT, PD_REGION, PD_SCALED, PD_UPSIDE, PD_SAME, PD_TILES, PD_N };
 +static const char *const present_direct_names[PD_N] = {
-+    "direct", "boot logo", "extra brightness", "10-bit", "part of the buffer", "scaled",
-+    "upside down", "same buffer again", "tiles",
++    "direct", "extra brightness", "part of the buffer", "scaled", "upside down",
++    "same buffer again", "tiles",
 +};
 +static int present_direct_on = -1;
 +static IOSurfaceRef present_direct_last;    /* QEMU thread: compared only */
@@ -336,7 +340,7 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
  static bool cocoa_gl_present(void)
  {
      GLuint src;
-@@ -10254,6 +10546,7 @@
+@@ -10254,6 +10545,7 @@
          return true;
      }
  
@@ -344,7 +348,7 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
      if (gl_scanout_borrow) {
          DisplayGLTexture texture = gl_scanout_borrow(gl_scanout_id);
          if (!texture.id) {
-@@ -10264,6 +10557,7 @@
+@@ -10264,6 +10556,7 @@
          h = texture.height;
          /* The surface's first row is the top of the window. */
          flip = !texture.y_0_top;
@@ -352,7 +356,7 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
      } else if (omacvm_splash_wanted(NULL, surface)) {
          /* No picture of the guest's: the boot logo (or black), view-sized. */
          splash = true;
-@@ -10289,7 +10583,9 @@
+@@ -10289,7 +10582,9 @@
  
      /* A 10-bit scanout keeps its depth: half-float surfaces. */
      GLint ifmt = 0;
@@ -363,7 +367,7 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
          glBindTexture(GL_TEXTURE_2D, src);
          glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &ifmt);
          glBindTexture(GL_TEXTURE_2D, 0);
-@@ -10367,7 +10663,38 @@
+@@ -10367,7 +10662,39 @@
       */
      bool boost = present_linear;
      int gain = qatomic_read(&omacvm_bright_gain_c);
@@ -371,7 +375,8 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
 +    /* OmacVM, present-direct-surface prototype: the guest's buffer as it is? */
 +    IOSurfaceRef direct = NULL;
 +    if (gsurf && present_direct_wanted()) {
-+        int why = splash ? PD_SPLASH : boost || linear ? PD_BRIGHT : deep ? PD_DEEP :
++        /* (only an 8-bit guest scanout is an IOSurface: never the boot logo or 10-bit) */
++        int why = boost || linear ? PD_BRIGHT :
 +                  gl_scanout_x || gl_scanout_y || gl_scanout_w != w || gl_scanout_h != h ?
 +                      PD_REGION :
 +                  w != present_w || h != present_h ? PD_SCALED :

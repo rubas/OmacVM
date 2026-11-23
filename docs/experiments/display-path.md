@@ -273,7 +273,7 @@ fresh VM per arm, A B B A, 3 rounds, 20 s each; another VM on the Mac drew 85-11
 | QEMU GPU ms/s, per run | 432, 480, 411, 450, 469, 451 | 393, 404, 362, 419, 432, 356 |
 | QEMU GPU ms/s, mean | 449 | 394 (-54, -0.45 ms a frame) |
 | WindowServer GPU ms/s | 0-5 | 0-5 |
-| Refreshes without a new frame, per ~2420 | 34, 26, 9, 1, 3, 16 | 6, 9, 3, 8, 28, 1 |
+| Runs of refreshes without a new frame (QEMU's repeats), per ~2420 refreshes | 34, 26, 9, 1, 3, 16 | 6, 9, 3, 8, 28, 1 |
 | Key to frame on the layer, page idle, medians | 19.4, 11.9, 11.6, 11.0 ms | 15.2, 11.1, 9.3, 8.9 ms |
 | Key to frame on the layer, page at 120 fps | 56.5, 46.9, 54.2, 49.3 ms | 48.1, 53.7, 52.5, 44.7 ms |
 
@@ -281,14 +281,16 @@ The ceiling, the same present with its draw skipped (a stale picture), was 72 ms
 WindowServer shows a full-screen IOSurface without compositing either way, so the gain is QEMU's draw
 only. Latency is to the commit before the vsync (add about 3 ms); the agent session has no screen
 recording, so missed refreshes come from QEMU's present trace and each frame's counters were read from
-the surface as it went up (`OMACVM_TEST_PACE_CHECK=1`): over about 40,000 direct frames none was torn
-(top and bottom counters agree) and none was written while shown. Resizing the guest's output (5120x2880
+the surface as it went up (`OMACVM_TEST_PACE_CHECK=1`, plain 8-bit surfaces only): over about 40,000
+frames, nearly all direct, no frame whose two counter strips were both read was torn, and none was
+written while shown. Resizing the guest's output (5120x2880
 to 3840x2160 and back) kept that, with 1-4 skipped frames around each change; screenshots of both arms
 have the same pixels (colour tag, orientation, alpha); `grim` in the guest is right and needed no shadow
 copy. With HDR (10-bit buffers) nothing changes: those stay plain textures and are drawn as before.
 
-Open: 10-bit and HDR buffers (an `l10r` IOSurface), extra brightness (drawn without its gain now), the
-spares' memory (59 MB each at 5K), power, and a real page scroll and video instead of the canvas.
+Open: 10-bit and HDR buffers (an `l10r` IOSurface), extra brightness (drawn wrong with such buffers now),
+second outputs, the spares' memory (59 MB each at 5K, outside the guest's budget), writes that skip
+virgl's check (see the patches' limits), power, and a real page scroll and video instead of the canvas.
 
 ### Cheaper ways to the same passes
 
