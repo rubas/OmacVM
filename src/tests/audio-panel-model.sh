@@ -273,7 +273,7 @@ if (seedText !== undefined && !/^[0-9]+$/.test(seedText)) throw new Error("OMACV
 const seed0 = seedText !== undefined ? Number(seedText) : Math.floor(Math.random() * 4294967296)
 let broken = ""
 for (let r = 0; r < 20000 && !broken; r++) broken = panelRun(seed0 + r, 60)
-expect(!broken, "on 20000 random orders of 60 events (seeds " + seed0 + "+): the modes of the Bluetooth output that plays once the app is free, and a reason for each read" + (broken ? "; broke at " + broken : ""))
+expect(!broken, "on 20000 random orders of 60 events (seeds " + seed0 + "+): a read in each opening, the modes of the Bluetooth output that plays once the app is free, and a reason for each read" + (broken ? "; broke at " + broken : ""))
 process.exit(failed ? 1 : 0)
 JS
 echo "audio-panel-model: all passed"
