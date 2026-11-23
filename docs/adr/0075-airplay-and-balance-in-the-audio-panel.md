@@ -131,8 +131,8 @@ beside the sliders and one output list:
 - The panel asks for the list once each time it opens, as the Mac's own
   module does, and once more for the modes of Bluetooth headphones that play
   while it is open: when its last read was for another output, and after a
-  press of a row, whose answer may have their modes closed; never on a
-  timer. Until the answer it shows the list of
+  press of a row answered with a list, which may have their modes closed;
+  never on a timer. Until the answer it shows the list of
   the last opening. The cost is the owner's choice: for about a second after
   the panel opens, the Mac's keyboard is Control Center's.
 - The speaker's own row has the checkmark, as on the Mac. CoreAudio's one
