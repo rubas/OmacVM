@@ -231,7 +231,7 @@ public final class SoundPicker {
 /// Control Center's window with the Sound module's list open. SoundPicker
 /// reads and presses it through Accessibility; sound-tests plays recorded
 /// lists through it.
-package protocol SoundWindow: AnyObject {
+public protocol SoundWindow: AnyObject {
     /// The window's elements now, in order.
     func read() throws -> [SoundElement]
     /// Presses the element that `find` points to in the list as it is now:
@@ -272,7 +272,7 @@ extension SoundWindow {
     /// list this code reads stands there within the 3 s a read waits, the
     /// window as it is then. Nothing in it is checked: the tree is for the
     /// macOS whose list this code cannot read.
-    package func shown() throws -> [SoundElement] {
+    public func shown() throws -> [SoundElement] {
         do {
             return try settledWithModes()
         } catch SoundPicker.Failure.unsupported(_) {
