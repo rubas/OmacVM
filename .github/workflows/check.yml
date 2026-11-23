@@ -27,6 +27,8 @@ concurrency:
 
 jobs:
   check:
+    # This fork (rubas/OmacVM) has no Mac mini: it runs this job only by hand.
+    if: github.repository != 'rubas/OmacVM' || github.event_name == 'workflow_dispatch'
     # A fork's pull request has another head repository (or none, once the fork
     # is deleted): false, so macos-15. fromJSON gives the runner's label list.
     runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","omacvm-mini"]') || 'macos-15' }}
@@ -786,7 +788,7 @@ jobs:
   # changed) is built once per Mac. Forks and a manual run (macos-15, no cache)
   # skip this job.
   app:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.repository != 'rubas/OmacVM' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","omacvm-mini"]') || 'macos-15' }}
     # A cache hit takes a few minutes; a runtime built from source up to ~30.
     timeout-minutes: 45
