@@ -247,6 +247,49 @@ the flip's completion until the IOSurface is no longer in use. Size L, risk high
 Gain: the present's draw, +0.19 W at 60 and +0.47 W at 120 frames a second on the Air (table above); partial
 present (and the tiled present on WindowServer's side) takes most of that already while little changes.
 
+### Scanout zero copy: prototype (2026-11-24)
+
+Branch `present-direct-surface`: `virgl-scanout-iosurface.patch` makes the guest's 8-bit scanout buffers
+IOSurfaces (bound as RECTANGLE textures; samplers read a 2D shadow), `omacvm-cocoa-present-direct.patch`
+puts the flipped buffer on the layer as it is. Both are off unless `OMACVM_SCANOUT_IOSURFACE=1` and
+`OMACVM_GL_PRESENT_DIRECT=1`. Apple's GL binds an IOSurface only as `GL_TEXTURE_RECTANGLE`
+(`CGLTexImageIOSurface2D` with `GL_TEXTURE_2D` returns `kCGLBadValue` on the M4 Pro), hence the shadow.
+
+The flip hold cannot live in QEMU's flush answer: Hyprland's flushes carry no fence (only `SUBMIT_3D` does),
+and the guest's page flip completes on its own vblank. So virgl checks each write into a scanout buffer:
+WindowServer keeps the frame shown before the current one in use, and with Hyprland's three buffers and
+the vsync queue a buffer is often still in use when Hyprland draws into it again. A plain wait (up to
+25 ms) stalled every third frame and halved the frame rate: the held buffer is released only by a newer
+frame, which the wait keeps from coming. The prototype instead moves a busy buffer to a free spare
+IOSurface (at most two per buffer) and copies its picture there on the GPU; that copy ran for 0 to 30
+frames a second, nothing waited.
+
+Mac mini M4 Pro, test VM full screen at 5120x2880 and 120 Hz, a canvas that changes the whole frame
+120 times a second (`tests/graphics/pacing/pacing.html` with a second counter strip at the bottom), a
+fresh VM per arm, A B B A, 3 rounds, 20 s each; another VM on the Mac drew 85-115 ms/s of GPU throughout:
+
+| | Drawn (main) | Direct (prototype) |
+|---|---|---|
+| QEMU GPU ms/s, per run | 432, 480, 411, 450, 469, 451 | 393, 404, 362, 419, 432, 356 |
+| QEMU GPU ms/s, mean | 449 | 394 (-54, -0.45 ms a frame) |
+| WindowServer GPU ms/s | 0-5 | 0-5 |
+| Refreshes without a new frame, per ~2420 | 34, 26, 9, 1, 3, 16 | 6, 9, 3, 8, 28, 1 |
+| Key to frame on the layer, page idle, medians | 19.4, 11.9, 11.6, 11.0 ms | 15.2, 11.1, 9.3, 8.9 ms |
+| Key to frame on the layer, page at 120 fps | 56.5, 46.9, 54.2, 49.3 ms | 48.1, 53.7, 52.5, 44.7 ms |
+
+The ceiling, the same present with its draw skipped (a stale picture), was 72 ms/s (0.60 ms a frame).
+WindowServer shows a full-screen IOSurface without compositing either way, so the gain is QEMU's draw
+only. Latency is to the commit before the vsync (add about 3 ms); the agent session has no screen
+recording, so missed refreshes come from QEMU's present trace and each frame's counters were read from
+the surface as it went up (`OMACVM_TEST_PACE_CHECK=1`): over about 40,000 direct frames none was torn
+(top and bottom counters agree) and none was written while shown. Resizing the guest's output (5120x2880
+to 3840x2160 and back) kept that, with 1-4 skipped frames around each change; screenshots of both arms
+have the same pixels (colour tag, orientation, alpha); `grim` in the guest is right and needed no shadow
+copy. With HDR (10-bit buffers) nothing changes: those stay plain textures and are drawn as before.
+
+Open: 10-bit and HDR buffers (an `l10r` IOSurface), extra brightness (drawn without its gain now), the
+spares' memory (59 MB each at 5K), power, and a real page scroll and video instead of the canvas.
+
 ### Cheaper ways to the same passes
 
 - **Hyprland direct scanout** for a full-screen client (render:direct_scanout 1): the client's buffer goes to
