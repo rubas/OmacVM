@@ -89,10 +89,9 @@ Panel {
   // On a group of modes: the option under the cursor (h/l), pressed by Enter.
   property int optionIndex: -1
 
-  // The panel asks the app for macOS's Sound list once per opening.
-  property bool listWanted: false
-  // The output the panel asked the list for in this opening.
-  property string listOutput: ""
+  // The output the panel read macOS's Sound list for in this opening, or
+  // null before its first read (Model.listRead).
+  property var listOutput: null
   // The balance the app read for the output that plays now.
   readonly property bool showBalance: available && sound.available && !!sound.balance && !!output && output.uid === sound.output
   readonly property bool balanceAdjustable: showBalance && sound.balance.settable === true
@@ -132,13 +131,8 @@ Panel {
       if (!inputVolumeSend.running && !inputVolumeProc.running) root.pendingInputVolume = -1
       // Another output has another balance, or none.
       if (root.opened && sound.available && root.output && root.output.uid !== sound.output) sound.refresh()
-      // Headphones that play now may have modes, which only a list read for
-      // them has: one more read per output while the panel is open.
-      if (root.opened && root.output && root.output.transport === "bluetooth" && root.output.uid !== root.listOutput) {
-        root.listOutput = root.output.uid
-        root.listWanted = true
-      }
       root.refreshDisplayModels()
+      // Headphones that play now may have modes, which only a read has.
       root.askForList()
     }
     function onBluetoothChanged() { root.refreshDisplayModels() }
@@ -146,13 +140,15 @@ Panel {
 
   Connections {
     target: sound
-    function onAnswered(list) {
-      // Also a list that an earlier opening asked for and that came just now.
-      if (list) root.listWanted = false
+    function onAnswered() {
       root.refreshDisplayModels()
       root.askForList()
     }
     function onReadingChanged() { root.refreshDisplayModels() }
+    // The app is free again: a read the panel still wants starts now. In
+    // onAnswered the app still counts as busy, as Quickshell reports the
+    // process's end only after its output.
+    function onBusyChanged() { root.askForList() }
   }
 
   function refreshDisplayModels() {
@@ -164,13 +160,16 @@ Panel {
     clampCursor()
   }
 
-  // Once per opening, as the Mac's own Sound module does when it opens. The
-  // app opens Control Center on the Mac for it, which takes the Mac's
-  // keyboard for about a second; until it answers, the panel shows the list
-  // of the last opening.
+  // Once per opening, as the Mac's own Sound module does when it opens, and
+  // once more for headphones that begin to play (Model.listRead). The app
+  // opens Control Center on the Mac for it, which takes the Mac's keyboard
+  // for about a second; until it answers, the panel shows the list of the
+  // last opening.
   function askForList() {
-    if (!opened || !listWanted || !available || !sound.available || !sound.accessibility || sound.busy) return
-    listWanted = false
+    if (!opened || !available || !sound.available || !sound.accessibility || sound.busy) return
+    var uid = Model.listRead(listOutput, output)
+    if (uid === null) return
+    listOutput = uid
     sound.read()
   }
 
@@ -287,8 +286,9 @@ Panel {
 
   onOpenedChanged: {
     if (opened) {
-      listWanted = true
-      listOutput = output ? output.uid : ""
+      // A read that the last opening asked for and that is still on its way
+      // counts for this one, for the output it was asked for.
+      if (!sound.reading) listOutput = null
       // A list's answer has the state too. The state alone is asked while
       // the app is not known to answer or to be allowed, which may have
       // changed since.

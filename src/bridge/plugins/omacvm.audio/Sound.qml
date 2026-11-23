@@ -46,8 +46,8 @@ Item {
 
   readonly property var command: ["/usr/bin/env", "/usr/local/bin/omacvm", "sound"]
 
-  // The app answered or failed to; list: with macOS's Sound list.
-  signal answered(bool list)
+  // The app answered or failed to.
+  signal answered()
 
   function refresh() {
     if (stateProc.running) return
@@ -110,7 +110,7 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         if (sound.take(text) !== "") sound.available = false
-        sound.answered(false)
+        sound.answered()
       }
     }
   }
@@ -127,7 +127,7 @@ Item {
         // macOS took the grant away meanwhile: no message, the state says so.
         if (sound.failure === "accessibility") sound.failure = ""
         if (sound.failure !== "") failureClear.restart()
-        sound.answered(!failed)
+        sound.answered()
         // Without a list the state alone: the output and its balance now.
         if (failed) sound.refresh()
       }

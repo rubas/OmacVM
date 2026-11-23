@@ -100,6 +100,54 @@ expect(M.optionCursor(listening, -1, 0) === 0 && M.optionCursor(listening, 0, 1)
 const someOff = { title: "Spatial Audio", options: [option("Off", false), option("Fixed", true, false), option("Head Tracked", false)] }
 expect(M.optionCursor(someOff, -1, 0) === 0 && M.optionCursor(someOff, 0, 1) === 2,
   "an option macOS does not offer is never under the cursor, also when it is selected")
+// The panel's reads of macOS's Sound list. Each event below calls Panel.qml's
+// askForList as the panel's handlers do (an opening, the Bridge's report of
+// the output, the app free again after a read or a press); it reads only
+// while the app is free. On the AirPods Pro above, whose modes macOS keeps
+// closed until a read opens them.
+function panel(output) {
+  const p = { output: output, asked: null, job: "", reads: [] }
+  p.ask = () => {
+    if (p.job) return
+    const uid = M.listRead(p.asked, p.output)
+    if (uid === null) return
+    p.asked = uid
+    p.reads.push(p.output ? p.output.name : "")
+    p.job = "read"
+  }
+  p.open = () => { if (p.job !== "read") p.asked = null; p.ask() }
+  p.bridge = o => { p.output = o; p.ask() }
+  p.press = () => { p.job = "press" }
+  p.free = () => { p.job = ""; p.ask() }
+  return p
+}
+const reads = p => p.reads.join(", ")
+let p = panel(display)
+p.open(); p.free(); p.press(); p.bridge(pods); p.free()
+expect(reads(p) === "Studio Display XDR Speakers, AirPods Pro - Find My",
+  "a click on the AirPods: the Bridge reports them before the press answers, and the panel reads the list once more for their modes")
+p = panel(display)
+p.open(); p.free(); p.press(); p.free(); p.bridge(pods)
+expect(reads(p) === "Studio Display XDR Speakers, AirPods Pro - Find My",
+  "the Bridge reports the AirPods after the press answered: the same read for their modes")
+p = panel(display)
+p.open(); p.bridge(pods); p.free()
+expect(reads(p) === "Studio Display XDR Speakers, AirPods Pro - Find My",
+  "the AirPods begin to play while the opening's read is on its way: one more read once it answered")
+p.free(); p.bridge(display); p.bridge(pods); p.free()
+expect(p.reads.length === 2, "one read per output and opening: back on the display, then on the AirPods again, no more reads")
+p.open(); p.free()
+expect(p.reads.length === 3, "the next opening reads once")
+p = panel(display)
+p.open(); p.bridge(pods); p.open(); p.free()
+expect(reads(p) === "Studio Display XDR Speakers, AirPods Pro - Find My",
+  "opened again while the last opening's read for the display is on its way, on the AirPods: that read counts, and one more for the AirPods")
+p = panel(display)
+p.open(); p.open(); p.free()
+expect(p.reads.length === 1, "opened again while that read is on its way, on the same output: no second read")
+p = panel(display)
+p.open(); p.free(); p.bridge(display); p.press(); p.free()
+expect(reads(p) === "Studio Display XDR Speakers", "the display plays: one read per opening, also after a press of an AirPlay speaker")
 process.exit(failed ? 1 : 0)
 JS
 echo "audio-panel-model: all passed"
