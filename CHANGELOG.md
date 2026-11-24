@@ -3,6 +3,33 @@
 What's new in each OmacVM release. The release notes on GitHub say the same
 in more words.
 
+## Unreleased
+
+- **Keys show sooner in Chromium, Chrome and Brave while a page moves.** Chromium-based browsers in the
+  VM now keep one finished frame waiting instead of two, so on a page that animates a key reaches the
+  screen about 10 ms sooner at 120 Hz (46 ms instead of 56 to the frame in a test VM). OmacVM puts
+  `--double-buffer-compositing` into each browser's flags file in `~/.config`, and into
+  `electron-flags.conf` for Electron apps that read it. Typing on a still page or in a terminal stays as
+  it was. A page that keeps the GPU busy for the whole refresh draws a few frames a second fewer. It
+  needs Update VM and a restart of the browser. How the time splits:
+  [docs/experiments/key-latency.md](docs/experiments/key-latency.md).
+- **AirPlay and balance in the Audio panel.** The Audio panel in Omarchy's bar now lists the Mac's
+  AirPlay speakers and TVs after the Mac's own outputs, so you can click to switch.
+  When the Mac's current output supports it, such as
+  headphones, the panel also shows a left/right Balance slider. AirPlay needs OmacVM allowed under
+  Accessibility on the Mac (System Settings → Privacy & Security → Accessibility), the same
+  permission Keyboard access already uses. Because macOS offers no other way, OmacVM opens Control
+  Center out of sight for about a second to read the list or switch, and keys typed during that
+  second do not reach the VM. The panel reads the AirPlay list each time it opens. It is also
+  calmer: no status line and no numbers beside the sliders. It needs the app update and Update VM.
+- **Headphone modes in the Audio panel.** When AirPods or other supported headphones are the Mac's
+  output, the Audio panel shows their macOS modes under their row in the Mac's own words and
+  language. On AirPods Pro, you get Listening Mode (Transparency, Adaptive, Noise Cancellation),
+  Spatial Audio, and Conversation Awareness. The panel hides a group when macOS offers none of its
+  options, and dims any unavailable option inside a shown group. Click to switch, or pick with h and
+  l and press Enter. This uses the same Control Center access as AirPlay, so the same Accessibility
+  permission and one-second keyboard pause apply. It needs the app update and Update VM.
+
 ## 3.6.0
 
 The Mac's own pointer on Omarchy, Mac key layouts for new VMs, dragging icons in the notch strip,

@@ -27,6 +27,8 @@ concurrency:
 
 jobs:
   check:
+    # This fork (rubas/OmacVM) has no Mac mini: it runs this job only by hand.
+    if: github.repository != 'rubas/OmacVM' || github.event_name == 'workflow_dispatch'
     # A fork's pull request has another head repository (or none, once the fork
     # is deleted): false, so macos-15. fromJSON gives the runner's label list.
     runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","omacvm-mini"]') || 'macos-15' }}
@@ -162,6 +164,9 @@ jobs:
       - name: OmacVM.app sound delay for the VM (QEMU's part, the Mac's output, limits)
         working-directory: app/app
         run: swift run audio-tests
+      - name: OmacVM.app the Mac's sound for the VM (Control Center's lists as recorded, AirPods' modes too, the route's rules)
+        working-directory: app/app
+        run: swift run sound-tests
       - name: OmacVM.app AirPods and media controls (the port's lines, when the VM is Now Playing, a fuzz)
         working-directory: app/app
         run: swift run media-tests
@@ -696,6 +701,9 @@ jobs:
       - name: OmacVM's bar widgets and display panel read the bar's colours and font only through a guard (no TypeError lines when the shell reloads a plugin)
         run: src/tests/plugin-bar-null.sh
 
+      - name: The audio panel's output list (which outputs are AirPlay speakers, which row has the checkmark and the modes, where the cursor stops)
+        run: src/tests/audio-panel-model.sh
+
       - name: Per-display workspaces step aside on Omarchy 4.5 and keep the rest of bindings.lua
         run: src/tests/workspaces-45.sh
 
@@ -799,7 +807,7 @@ jobs:
   # changed) is built once per Mac. Forks and a manual run (macos-15, no cache)
   # skip this job.
   app:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.repository != 'rubas/OmacVM' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","omacvm-mini"]') || 'macos-15' }}
     # A cache hit takes a few minutes; a runtime built from source up to ~30.
     timeout-minutes: 45
@@ -957,6 +965,9 @@ jobs:
 
       - name: OmacVM's edits of Omarchy's shell on Linux (GNU tools, as in the VM)
         run: src/tests/omarchy-shell.sh
+
+      - name: The audio panel's output list and its reads of macOS's Sound list on random orders of events (node)
+        run: src/tests/audio-panel-model.sh
 
       - name: Per-display workspaces step aside on Omarchy 4.5 on Linux (GNU awk, as in the VM)
         run: src/tests/workspaces-45.sh
