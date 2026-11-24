@@ -14,6 +14,8 @@
 #    library that tells the shim the size apps show a video at)
 #  * video encoding on it: Chrome's and Brave's VA-API encoder for WebRTC
 #    (browser-video-encode.py; omacvm-video-encode at apply and each start)
+#  * Chromium with one frame fewer in flight (/etc/chromium-flags.conf):
+#    keys reach the screen a refresh sooner while a page animates
 #  * a hyprpicker that draws the frozen screen of screenshots only when it
 #    changes (hyprpicker/; the package's drew every display on every frame)
 #  * screenshots and screen sharing of HDR apps at SDR white in an HDR VM
@@ -157,6 +159,18 @@ install -Dm644 omacvm-app-video.js /usr/lib/firefox/defaults/pref/omacvm-app-vid
 # renderer string without "virgl", so Skia keeps instanced drawing for canvas
 # and SVG paths (the file says why).
 install -Dm644 50-omacvm-chrome.drirc /usr/share/drirc.d/50-omacvm-chrome.conf
+# Chromium keeps one finished frame in flight instead of two
+# (--double-buffer-compositing). It commits each frame only after Hyprland's
+# frame callback for the one before, and Hyprland sends that once a refresh,
+# so each frame in flight is a refresh between a key and the screen on a page
+# that animates (docs/experiments/key-latency.md). Arch's launcher reads
+# /etc/chromium-flags.conf before the user's file; the line goes in once and
+# the file's other lines stay (a last line without its newline gets one).
+CF=/etc/chromium-flags.conf
+if ! grep -qxF -- --double-buffer-compositing "$CF" 2>/dev/null; then
+  [[ -s $CF && -n $(tail -c1 "$CF") ]] && echo >> "$CF"
+  echo --double-buffer-compositing >> "$CF"
+fi
 # Vulkan (Venus): a Venus driver that sizes GPU memory to the Mac's 16 KiB
 # pages (venus/vulkan-virtio.sh says why). Built now when the Mac says this VM
 # gets Vulkan (OMACVM_GRAPHICS, from omacvm apply), and after each boot (a
