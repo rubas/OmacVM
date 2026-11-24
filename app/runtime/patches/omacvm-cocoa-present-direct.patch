@@ -1,211 +1,441 @@
 From: OmacVM
-Subject: [PATCH] cocoa: the guest's IOSurface buffer as the layer's contents (prototype)
+Subject: [PATCH] cocoa: the guest's scanout IOSurface as the layer's contents
 
-What: with OMACVM_GL_PRESENT_DIRECT=1 and a scanout buffer that virgl made
-as an IOSurface (virgl-scanout-iosurface.patch, OMACVM_SCANOUT_IOSURFACE=1),
-a frame goes on the layer as that buffer: no draw into the present's
-surfaces. It waits for the guest's GPU work as a drawn frame waits for the
-draw (a fence after the guest's flush) and takes the vsync queue like any
-frame. Frames that must be drawn (extra brightness, part of the buffer, a
-size the surfaces do not have yet, upside down, the buffer shown last flushed
-again, the tiled present) are drawn from the IOSurface as a RECTANGLE
-texture; the partial present then draws them in full. The buffer is tagged sRGB as the present's surfaces are. DisplayGLTexture
-carries the IOSurface (virtio-gpu-virgl.c asks virgl for it).
-qemu.log every 5 s: "cocoa: present-direct: direct N, <reason> M ...".
-Test hook OMACVM_TEST_PACE_CHECK=1 (with pace2.html: tests/graphics/pacing's
-page with a second counter strip at the bottom): each whole frame's
-counters are read from its surface as it goes up (plain 8-bit surfaces): top
-and bottom must agree, the frame before must still hold its own counter (not
-written while shown), and the steps between frames are counted; marker
-flips are logged for key latency.
-Why: the present's draw is 0.45 ms of GPU per frame at 5K, 120 frames a
-second (54 ms/s); WindowServer shows a full-screen IOSurface without
-compositing either way.
-Limits (review of the prototype): with extra brightness on, such frames are
-drawn wrong (sRGB values into linear surfaces, midtones too bright); a
-second output's window and the CAOpenGLLayer path still bind the borrowed
-2D texture, a stale shadow for these buffers; the fence that gates a direct
-frame is made in QEMU's present context, so it covers the guest's GPU work
-only as far as Apple's GL orders contexts of one share group (the drawn
-present's copy relies on the same); a failed RECTANGLE draw still queues
-its frame. 8-bit SDR only.
-TODO(revert: prototype on branch present-direct-surface, not for main as it is).
+What: a scanout buffer that virgl made as an IOSurface
+(virgl-scanout-iosurface.patch) goes on the layer as it is: no draw into the
+present's surfaces, which are then not made at all. It waits for the guest's GPU
+work on it (virgl's fence after the last write, in the present queue) as a drawn
+frame waits for its draw, takes the vsync queue like any frame, and is tagged with
+the colour space a present surface would have (sRGB, or PQ for a 10-bit buffer with
+HDR on; the layer then shows it with EDR). The buffer shown last, flushed again with
+nothing written, stays as it is (a write moves it to another IOSurface).
+Drawn instead, from the IOSurface as a RECTANGLE texture: a frame of extra
+brightness (the brightness shader reading a RECTANGLE texture), an upside-down
+buffer (the boot console's). Such a frame waits for the guest's writes on the GPU
+and keeps the IOSurface in use until its draw is done. A second output's window,
+the CAOpenGLLayer path (GPU safe mode) and the boot logo's probe read the buffer's
+RECTANGLE texture the same way; DisplayGLTexture carries the IOSurface and its fence
+operations (virtio-gpu-virgl.c). The tiled present and the partial present's check
+mode leave such buffers alone. qemu.log once a minute: "cocoa: the guest's IOSurface
+frames, last minute: ...".
+Test hook OMACVM_TEST_PACE_CHECK=1: as each whole frame goes on the layer, QEMU reads
+its surface (plain surfaces only) and counts frames written while shown (a 16 x 16
+grid of pixels changed after the frame went up); with tests/graphics/pacing's page
+and a second counter strip at its bottom also torn frames, the counter's steps, and
+the marker's flips for key latency.
+Why: the present's draw cost 0.60 ms of GPU a frame at 5120x2880.
 Upstream: not sent (OmacVM's IOSurface present).
-Tests: VM A/B in docs/experiments/display-path.md.
+Tests: VM A/B and the frame check in docs/experiments/display-path.md.
 Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
---- a/ui/cocoa.m
-+++ b/ui/cocoa.m
-@@ -8998,6 +8998,7 @@
-     double flushed;                     /* reached QEMU's present */
-     bool linear;                        /* drawn in linear light (extra brightness) */
-     OmacvmPTFrame *pt;                  /* tiled present: tile updates (surf NULL) */
-+    bool direct;                        /* surf is the guest's own buffer (no draw) */
- } PresentFrame;
- 
- static struct {
-@@ -10220,6 +10221,296 @@
+diff --git a/hw/display/virtio-gpu-virgl.c b/hw/display/virtio-gpu-virgl.c
+index de2019d..4d44af4 100644
+--- a/hw/display/virtio-gpu-virgl.c
++++ b/hw/display/virtio-gpu-virgl.c
+@@ -574,6 +574,18 @@ static void virgl_cmd_resource_flush(VirtIOGPU *g,
+     }
  }
  
- /* QEMU thread, BQL held. Returns false when nothing could be shown. */
-+/*
-+ * OmacVM, present-direct-surface prototype. With OMACVM_GL_PRESENT_DIRECT=1 and a
-+ * scanout buffer that virgl made as an IOSurface (OMACVM_SCANOUT_IOSURFACE=1), a frame
-+ * the guest flipped to goes on the layer as that buffer: no draw. virgl holds the
-+ * guest's next write into a buffer while anything still uses it (vrend_scanout_write_hold).
-+ * Frames that must be drawn (extra brightness, part of the buffer, scaled, upside down,
-+ * the buffer shown last flushed again, tiles) are drawn from the IOSurface as a
-+ * RECTANGLE texture. TODO(revert: prototype only, not for main as it is).
-+ */
-+enum { PD_DIRECT, PD_BRIGHT, PD_REGION, PD_SCALED, PD_UPSIDE, PD_SAME, PD_TILES, PD_N };
-+static const char *const present_direct_names[PD_N] = {
-+    "direct", "extra brightness", "part of the buffer", "scaled", "upside down",
-+    "same buffer again", "tiles",
++#ifdef __APPLE__
++static void *virgl_iosurface_fence(uint32_t id)
++{
++    return virgl_renderer_resource_iosurface_fence(id);
++}
++
++static const DisplayGLIOSurfaceOps virgl_iosurface_ops = {
++    .fence = virgl_iosurface_fence,
++    .wait = virgl_renderer_iosurface_fence_wait,
 +};
-+static int present_direct_on = -1;
++#endif
++
+ static DisplayGLTexture virgl_borrow_texture_for_scanout(uint32_t id)
+ {
+     DisplayGLTexture texture = {};
+@@ -602,6 +614,12 @@ static DisplayGLTexture virgl_borrow_texture_for_scanout(uint32_t id)
+     texture.width = info.width;
+     texture.height = info.height;
+     texture.id = info.tex_id;
++#ifdef __APPLE__
++    texture.iosurface = virgl_renderer_resource_get_iosurface(id);
++    if (texture.iosurface) {
++        texture.iosurface_ops = &virgl_iosurface_ops;
++    }
++#endif
+ 
+     return texture;
+ }
+diff --git a/include/ui/console.h b/include/ui/console.h
+index 6919ece..bf61982 100644
+--- a/include/ui/console.h
++++ b/include/ui/console.h
+@@ -99,8 +99,22 @@ typedef struct DisplayGLTexture {
+     uint32_t width;
+     uint32_t height;
+     void *d3d_tex2d;
++    /*
++     * OmacVM (macOS): the buffer is this IOSurface (an IOSurfaceRef), and id its
++     * GL_TEXTURE_RECTANGLE texture; NULL for a GL_TEXTURE_2D id. Before reading it,
++     * wait for the guest's writes: iosurface_ops->wait(iosurface_ops->fence(id), gpu),
++     * with a context of the renderer's share group current (gpu: that context waits
++     * on the GPU, else the caller waits).
++     */
++    void *iosurface;
++    const struct DisplayGLIOSurfaceOps *iosurface_ops;
+ } DisplayGLTexture;
+ 
++typedef struct DisplayGLIOSurfaceOps {
++    void *(*fence)(uint32_t id);            /* NULL when nothing was written */
++    void (*wait)(void *fence, bool gpu);    /* once per fence, also a NULL one */
++} DisplayGLIOSurfaceOps;
++
+ typedef DisplayGLTexture (*DisplayGLTextureBorrower)(uint32_t id);
+ 
+ typedef struct ScanoutTexture {
+diff --git a/ui/cocoa.m b/ui/cocoa.m
+index e4e6fbd..93726e3 100644
+--- a/ui/cocoa.m
++++ b/ui/cocoa.m
+@@ -314,6 +314,10 @@ static void cocoa_gl_render(void);
+ static void omacvm_splash_view_size(uint32_t w, uint32_t h);
+ static void present_tiles_hide(void);
+ static void present_tiles_whole_shown(CALayer *layer, IOSurfaceRef surf);
++/* OmacVM: the guest's buffer as an IOSurface (direct present) */
++static bool omacvm_rect_draw(GLuint tex, uint32_t w, uint32_t h, bool flip, GLint filter,
++                             int gain_c, bool pq);
++static void omacvm_iosurface_wait(const DisplayGLTexture *texture, uint32_t id, bool gpu);
+ /* GL frames are shown as IOSurfaces (the view's layer is a plain CALayer). */
+ static bool cocoa_gl_present_on(void);
+ 
+@@ -7733,7 +7737,8 @@ static void omacvm_splash_update(void)
+  * from the bottom) into px as 0xAARRGGBB. False if it cannot be read (said
+  * once; the logo then waits for the display agent or the time limit).
+  */
+-static bool omacvm_splash_read(GLuint tex, int x, int y, int w, int h, uint32_t *px)
++static bool omacvm_splash_read(GLuint tex, GLenum target, int x, int y, int w, int h,
++                               uint32_t *px)
+ {
+     static GLuint fb;
+     static bool said;
+@@ -7746,7 +7751,7 @@ static bool omacvm_splash_read(GLuint tex, int x, int y, int w, int h, uint32_t
+         /* not ours */
+     }
+     glBindFramebuffer(GL_READ_FRAMEBUFFER, fb);
+-    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
++    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, tex, 0);
+     status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+     if (status == GL_FRAMEBUFFER_COMPLETE) {
+         glPixelStorei(GL_PACK_ALIGNMENT, 4);
+@@ -7754,7 +7759,7 @@ static bool omacvm_splash_read(GLuint tex, int x, int y, int w, int h, uint32_t
+         glReadPixels(x, y, w, h, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, px);
+     }
+     err = glGetError();
+-    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
++    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, 0, 0);
+     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+     if (status != GL_FRAMEBUFFER_COMPLETE || err != GL_NO_ERROR) {
+         if (!said) {
+@@ -7790,9 +7795,12 @@ static bool omacvm_splash_sees_desktop(void)
+             return false;
+         }
+         with_gl_view_ctx(^{
++            /* an IOSurface buffer is a RECTANGLE texture, read after the guest's writes */
++            omacvm_iosurface_wait(&tex, gl_scanout_id, true);
+             for (int r = 0; r < SPLASH_PROBE_ROWS && ok; r++) {
+                 int y = gl_scanout_y + omacvm_splash_probe_at(r, SPLASH_PROBE_ROWS, gl_scanout_h);
+-                ok = omacvm_splash_read(tex.id, gl_scanout_x, tex.y_0_top ? y : tex.height - 1 - y,
++                ok = omacvm_splash_read(tex.id, tex.iosurface ? GL_TEXTURE_RECTANGLE : GL_TEXTURE_2D,
++                                        gl_scanout_x, tex.y_0_top ? y : tex.height - 1 - y,
+                                         gl_scanout_w, 1, line);
+                 for (int c = 0; ok && c < SPLASH_PROBE_COLS; c++) {
+                     px[r * SPLASH_PROBE_COLS + c] =
+@@ -8578,31 +8586,38 @@ static void cocoa_gl_render(void)
+             cocoa_gl_log("before bind borrow fb=%d fb_status=0x%x tex=%u", fb, fbs, texture.id);
+         }
+ 
+-        glBindTexture(GL_TEXTURE_2D, texture.id);
+-        if (cocoa_gl_trace_enabled()) {
+-            GLenum err = glGetError();
+-            if (err != GL_NO_ERROR) {
+-                cocoa_gl_log("after bind texture err=0x%x", err);
++        if (texture.iosurface) {
++            /* an IOSurface buffer: its RECTANGLE texture, after the guest's writes */
++            omacvm_iosurface_wait(&texture, gl_scanout_id, true);
++            omacvm_rect_draw(texture.id, texture.width, texture.height, texture.y_0_top,
++                             filter, 0, false);
++        } else {
++            glBindTexture(GL_TEXTURE_2D, texture.id);
++            if (cocoa_gl_trace_enabled()) {
++                GLenum err = glGetError();
++                if (err != GL_NO_ERROR) {
++                    cocoa_gl_log("after bind texture err=0x%x", err);
++                }
+             }
+-        }
+-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+-        if (cocoa_gl_trace_enabled()) {
+-            GLenum err = glGetError();
+-            if (err != GL_NO_ERROR) {
+-                cocoa_gl_log("after texparam err=0x%x", err);
++            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
++            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
++            if (cocoa_gl_trace_enabled()) {
++                GLenum err = glGetError();
++                if (err != GL_NO_ERROR) {
++                    cocoa_gl_log("after texparam err=0x%x", err);
++                }
++            }
++            if (cocoa_gl_trace_enabled() && draw_fb != 0) {
++                GLenum fbs = glCheckFramebufferStatus(GL_FRAMEBUFFER);
++                GLint attach_type = 0;
++                glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
++                                                      GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
++                                                      &attach_type);
++                cocoa_gl_log("pre blit fb=%d status=0x%x color0=%d", draw_fb, fbs, attach_type);
+             }
+-        }
+-        if (cocoa_gl_trace_enabled() && draw_fb != 0) {
+-            GLenum fbs = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+-            GLint attach_type = 0;
+-            glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+-                                                  GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
+-                                                  &attach_type);
+-            cocoa_gl_log("pre blit fb=%d status=0x%x color0=%d", draw_fb, fbs, attach_type);
+-        }
+ 
+-        qemu_gl_run_texture_blit(dgc.gls, texture.y_0_top);
++            qemu_gl_run_texture_blit(dgc.gls, texture.y_0_top);
++        }
+         if (cocoa_gl_trace_enabled()) {
+             GLenum blit_err = glGetError();
+             GLint fb = 0;
+@@ -9735,7 +9750,7 @@ static CGColorSpaceRef cocoa_gl_present_colorspace(bool deep, bool linear)
+ static void cocoa_gl_layer_follow(CALayer *layer, IOSurfaceRef surf, bool linear)
+ {
+     OSType fmt = IOSurfaceGetPixelFormat(surf);
+-    BOOL hdr = (fmt == 'RGhA' || fmt == '&RhA') &&
++    BOOL hdr = (fmt == 'RGhA' || fmt == '&RhA' || fmt == 'l10r') &&
+                present_color == 1 && (cocoa_gl_present_hdr_wanted() || linear);
+     if ([layer wantsExtendedDynamicRangeContent] != hdr) {
+         [layer setWantsExtendedDynamicRangeContent:hdr];
+@@ -10219,6 +10234,447 @@ static int cocoa_gl_present_tiles(GLuint src, bool flip)
+     return nt;
+ }
+ 
++/*
++ * OmacVM, direct present: a scanout buffer that virgl made as an IOSurface
++ * (virgl-scanout-iosurface.patch) goes on the layer as it is, with no draw into the
++ * present's surfaces. It waits for the guest's GPU work on it (virgl's fence after its
++ * last write) as a drawn frame waits for its draw, and takes the vsync queue like any
++ * frame; virgl moves the guest's next write into a buffer still in use to another
++ * IOSurface. A frame of extra brightness, or an upside-down buffer (the boot console's),
++ * is drawn from the IOSurface into the present's surfaces; the buffer shown last,
++ * flushed again with nothing written, stays as it is. Once a minute qemu.log says how
++ * the frames went.
++ */
++enum { PD_DIRECT, PD_BRIGHT, PD_UPSIDE, PD_SAME, PD_N };
++static const char *const present_direct_names[PD_N] = {
++    "on the layer as they are", "drawn for extra brightness", "drawn upright",
++    "the buffer shown already",
++};
 +static IOSurfaceRef present_direct_last;    /* QEMU thread: compared only */
 +static uint64_t present_direct_n[PD_N];
 +static int64_t present_direct_log_ns;
-+static GLuint present_rect_prog, present_rect_vao, present_rect_vbo;
-+static GLint present_rect_u_size, present_rect_u_flip;
-+static int present_rect_made;
-+
-+static bool present_direct_wanted(void)
-+{
-+    if (present_direct_on < 0) {
-+        const char *e = getenv("OMACVM_GL_PRESENT_DIRECT");
-+        present_direct_on = e && !strcmp(e, "1");
-+        info_report("cocoa: present: %s", present_direct_on ?
-+                    "the guest's IOSurface buffers go on the layer as they are (OMACVM_GL_PRESENT_DIRECT=1)" :
-+                    "frames drawn into the present's surfaces");
-+    }
-+    return present_direct_on;
-+}
 +
 +static void present_direct_count(int why)
 +{
 +    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
++
 +    present_direct_n[why]++;
 +    if (!present_direct_log_ns) {
 +        present_direct_log_ns = now;
-+    } else if (now - present_direct_log_ns >= 5 * NANOSECONDS_PER_SECOND) {
-+        GString *s = g_string_new("");
++    } else if (now - present_direct_log_ns >= 60 * NANOSECONDS_PER_SECOND) {
++        GString *line = g_string_new("");
 +        for (int i = 0; i < PD_N; i++) {
 +            if (present_direct_n[i]) {
-+                g_string_append_printf(s, "%s%s %" PRIu64, s->len ? ", " : "",
-+                                       present_direct_names[i], present_direct_n[i]);
++                g_string_append_printf(line, "%s%" PRIu64 " %s", line->len ? ", " : "",
++                                       present_direct_n[i], present_direct_names[i]);
 +            }
 +        }
-+        info_report("cocoa: present-direct: %s in 5 s", s->str);
-+        g_string_free(s, true);
++        info_report("cocoa: the guest's IOSurface frames, last minute: %s", line->str);
++        g_string_free(line, true);
 +        memset(present_direct_n, 0, sizeof(present_direct_n));
 +        present_direct_log_ns = now;
 +    }
 +}
 +
-+/* present_ctx current: the program that draws a RECTANGLE texture as QEMU's blit. */
-+static bool present_rect_program(void)
++/* The colour space the guest's IOSurface shows in, as the present's surfaces would. */
++static void present_direct_tag(IOSurfaceRef surf, bool deep)
 +{
-+    static const GLfloat quad[] = { -1, -1, 1, -1, -1, 1, 1, 1 };
-+    static const char *vert =
-+        "#version 140\n"
-+        "in vec2 in_position;\n"
-+        "uniform vec2 size;\n"
-+        "uniform float yflip;\n"
-+        "out vec2 ex_tex_coord;\n"
-+        "void main(void) {\n"
-+        "    gl_Position = vec4(in_position, 0.0, 1.0);\n"
-+        "    ex_tex_coord = vec2(1.0 + in_position.x, 1.0 + yflip * in_position.y) * 0.5 * size;\n"
-+        "}\n";
-+    static const char *frag =
-+        "#version 140\n"
-+        "uniform sampler2DRect image;\n"
-+        "in vec2 ex_tex_coord;\n"
-+        "out vec4 out_frag_color;\n"
-+        "void main(void) {\n"
-+        "    out_frag_color = texture(image, ex_tex_coord);\n"
-+        "}\n";
++    CGColorSpaceRef cs = cocoa_gl_present_colorspace(deep, false);
++    CFPropertyListRef want = cs ? CGColorSpaceCopyPropertyList(cs) : NULL;
++    CFTypeRef now = IOSurfaceCopyValue(surf, kIOSurfaceColorSpace);
 +
-+    if (present_rect_made) {
-+        return present_rect_made > 0;
++    if (want && !(now && CFEqual(now, want))) {
++        IOSurfaceSetValue(surf, kIOSurfaceColorSpace, want);
++    } else if (!want && now) {
++        IOSurfaceRemoveValue(surf, kIOSurfaceColorSpace);
 +    }
-+    GLuint vs = omacvm_bright_shader(GL_VERTEX_SHADER, vert);
-+    GLuint fs = omacvm_bright_shader(GL_FRAGMENT_SHADER, frag);
-+    GLint ok = 0;
-+    if (vs && fs) {
-+        present_rect_prog = glCreateProgram();
-+        glAttachShader(present_rect_prog, vs);
-+        glAttachShader(present_rect_prog, fs);
-+        glBindAttribLocation(present_rect_prog, 0, "in_position");
-+        glLinkProgram(present_rect_prog);
-+        glGetProgramiv(present_rect_prog, GL_LINK_STATUS, &ok);
++    if (now) {
++        CFRelease(now);
 +    }
-+    glDeleteShader(vs);
-+    glDeleteShader(fs);
-+    if (!ok) {
-+        present_rect_made = -1;
-+        warn_report("cocoa: present-direct: no RECTANGLE program");
-+        return false;
++    if (want) {
++        CFRelease(want);
 +    }
-+    glUseProgram(present_rect_prog);
-+    glUniform1i(glGetUniformLocation(present_rect_prog, "image"), 0);
-+    present_rect_u_size = glGetUniformLocation(present_rect_prog, "size");
-+    present_rect_u_flip = glGetUniformLocation(present_rect_prog, "yflip");
-+    glGenVertexArrays(1, &present_rect_vao);
-+    glBindVertexArray(present_rect_vao);
-+    glGenBuffers(1, &present_rect_vbo);
-+    glBindBuffer(GL_ARRAY_BUFFER, present_rect_vbo);
-+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
-+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
-+    glEnableVertexAttribArray(0);
-+    glBindBuffer(GL_ARRAY_BUFFER, 0);
-+    glBindVertexArray(0);
-+    present_rect_made = 1;
-+    return true;
++    CGColorSpaceRelease(cs);
 +}
 +
 +/*
-+ * present_ctx current: the guest's IOSurface buffer drawn into the bound framebuffer.
-+ * The texture goes right after the draw: a texture bound to an IOSurface keeps it in
-+ * use (IOSurfaceIsInUse), and virgl holds the guest's writes while it is.
++ * Drawing a RECTANGLE texture (an IOSurface) into the bound framebuffer: as QEMU's blit
++ * (flip as texture_blit_flip), or with gain_c as omacvm_bright_blit (linear light times
++ * gain, from PQ with pq). Any context of the display's share group: the programs are
++ * shared, each context has a vertex array of its own (none of them has an attribute).
 + */
-+static bool present_rect_blit(IOSurfaceRef s, bool flip, GLint filter)
++#define OMACVM_RECT_VERT \
++    "#version 140\n" \
++    "uniform vec2 size;\n" \
++    "uniform float yflip;\n" \
++    "out vec2 ex_tex_coord;\n" \
++    "void main(void) {\n" \
++    "    vec2 p = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;\n" \
++    "    gl_Position = vec4(p, 0.0, 1.0);\n" \
++    "    ex_tex_coord = vec2(1.0 + p.x, 1.0 + yflip * p.y) * 0.5 * size;\n" \
++    "}\n"
++#define OMACVM_RECT_FRAG \
++    "#version 140\n" \
++    "uniform sampler2DRect image;\n" \
++    "in vec2 ex_tex_coord;\n" \
++    "out vec4 out_frag_color;\n" \
++    "void main(void) {\n" \
++    "    out_frag_color = texture(image, ex_tex_coord);\n" \
++    "}\n"
++#define OMACVM_RECT_CTXS 8
++static struct { CGLContextObj ctx; GLuint vao; } omacvm_rect_vaos[OMACVM_RECT_CTXS];
++static unsigned omacvm_rect_next;
++static GLuint omacvm_rect_prog[2];          /* plain, extra brightness */
++static GLint omacvm_rect_u[2][4];           /* size, yflip, gain, pq */
++static int omacvm_rect_made;                /* 1 made, -1 failed */
++
++static bool omacvm_rect_programs(void)
 +{
-+    GLuint tex;
-+    if (!present_rect_program()) {
++    if (omacvm_rect_made) {
++        return omacvm_rect_made > 0;
++    }
++    /* the brightness shader as it is, reading a RECTANGLE texture */
++    GString *bright = g_string_new(OMACVM_BRIGHT_FRAG);
++    g_string_replace(bright, "uniform sampler2D image;", "uniform sampler2DRect image;", 1);
++    const char *frag[2] = { OMACVM_RECT_FRAG, bright->str };
++    omacvm_rect_made = 1;
++    for (int b = 0; b < 2 && omacvm_rect_made > 0; b++) {
++        GLuint vs = omacvm_bright_shader(GL_VERTEX_SHADER, OMACVM_RECT_VERT);
++        GLuint fs = omacvm_bright_shader(GL_FRAGMENT_SHADER, frag[b]);
++        GLint ok = 0;
++        if (vs && fs) {
++            omacvm_rect_prog[b] = glCreateProgram();
++            glAttachShader(omacvm_rect_prog[b], vs);
++            glAttachShader(omacvm_rect_prog[b], fs);
++            glLinkProgram(omacvm_rect_prog[b]);
++            glGetProgramiv(omacvm_rect_prog[b], GL_LINK_STATUS, &ok);
++        }
++        glDeleteShader(vs);
++        glDeleteShader(fs);
++        if (!ok) {
++            omacvm_rect_made = -1;
++            break;
++        }
++        glUseProgram(omacvm_rect_prog[b]);
++        glUniform1i(glGetUniformLocation(omacvm_rect_prog[b], "image"), 0);
++        omacvm_rect_u[b][0] = glGetUniformLocation(omacvm_rect_prog[b], "size");
++        omacvm_rect_u[b][1] = glGetUniformLocation(omacvm_rect_prog[b], "yflip");
++        omacvm_rect_u[b][2] = glGetUniformLocation(omacvm_rect_prog[b], "gain");
++        omacvm_rect_u[b][3] = glGetUniformLocation(omacvm_rect_prog[b], "pq");
++    }
++    g_string_free(bright, true);
++    if (omacvm_rect_made < 0) {
++        error_report("cocoa: no program for the guest's IOSurface frames: they stay black");
++    }
++    return omacvm_rect_made > 0;
++}
++
++static bool omacvm_rect_draw(GLuint tex, uint32_t w, uint32_t h, bool flip, GLint filter,
++                             int gain_c, bool pq)
++{
++    CGLContextObj ctx = CGLGetCurrentContext();
++    GLuint vao = 0;
++    int b = gain_c > 0;
++
++    if (!omacvm_rect_programs()) {
 +        return false;
 +    }
-+    glGenTextures(1, &tex);
++    for (unsigned i = 0; i < OMACVM_RECT_CTXS && !vao; i++) {
++        if (omacvm_rect_vaos[i].ctx == ctx && glIsVertexArray(omacvm_rect_vaos[i].vao)) {
++            vao = omacvm_rect_vaos[i].vao;
++        }
++    }
++    if (!vao) {
++        unsigned i = omacvm_rect_next++ % OMACVM_RECT_CTXS;
++        glGenVertexArrays(1, &vao);
++        omacvm_rect_vaos[i].ctx = ctx;
++        omacvm_rect_vaos[i].vao = vao;
++    }
++    glActiveTexture(GL_TEXTURE0);
 +    glBindTexture(GL_TEXTURE_RECTANGLE, tex);
-+    CGLTexImageIOSurface2D(present_ctx, GL_TEXTURE_RECTANGLE, GL_RGBA,
-+                           IOSurfaceGetWidth(s), IOSurfaceGetHeight(s), GL_BGRA,
-+                           GL_UNSIGNED_INT_8_8_8_8_REV, s, 0);
 +    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MAG_FILTER, filter);
 +    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MIN_FILTER, filter);
-+    glUseProgram(present_rect_prog);
-+    glUniform2f(present_rect_u_size, IOSurfaceGetWidth(s), IOSurfaceGetHeight(s));
-+    glUniform1f(present_rect_u_flip, flip ? 1.0f : -1.0f);
-+    glBindVertexArray(present_rect_vao);
++    glUseProgram(omacvm_rect_prog[b]);
++    glUniform2f(omacvm_rect_u[b][0], w, h);
++    glUniform1f(omacvm_rect_u[b][1], flip ? 1.0f : -1.0f);
++    if (b) {
++        glUniform1f(omacvm_rect_u[b][2], gain_c / 100.0f);
++        glUniform1f(omacvm_rect_u[b][3], pq ? 1.0f : 0.0f);
++    }
++    glBindVertexArray(vao);
 +    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 +    glBindVertexArray(0);
 +    glBindTexture(GL_TEXTURE_RECTANGLE, 0);
-+    glDeleteTextures(1, &tex);
 +    return true;
 +}
 +
++/* A RECTANGLE texture of the current context on the IOSurface, 0 when it cannot be bound. */
++static GLuint omacvm_iosurface_texture(IOSurfaceRef surf)
++{
++    bool deep = IOSurfaceGetPixelFormat(surf) == 'l10r';
++    GLuint tex = 0;
++
++    glGenTextures(1, &tex);
++    glBindTexture(GL_TEXTURE_RECTANGLE, tex);
++    if (CGLTexImageIOSurface2D(CGLGetCurrentContext(), GL_TEXTURE_RECTANGLE,
++                               deep ? GL_RGB10_A2 : GL_RGBA,
++                               IOSurfaceGetWidth(surf), IOSurfaceGetHeight(surf), GL_BGRA,
++                               deep ? GL_UNSIGNED_INT_2_10_10_10_REV :
++                                      GL_UNSIGNED_INT_8_8_8_8_REV,
++                               surf, 0) != kCGLNoError) {
++        glDeleteTextures(1, &tex);
++        tex = 0;
++    }
++    glBindTexture(GL_TEXTURE_RECTANGLE, 0);
++    return tex;
++}
++
++/* The current context (gpu) or the caller waits for the guest's writes into the buffer. */
++static void omacvm_iosurface_wait(const DisplayGLTexture *texture, uint32_t id, bool gpu)
++{
++    if (texture->iosurface_ops) {
++        texture->iosurface_ops->wait(texture->iosurface_ops->fence(id), gpu);
++    }
++}
++
 +/*
-+ * OmacVM prototype test hook (OMACVM_TEST_PACE_CHECK=1, with tests/graphics/pacing's
-+ * page and a second counter strip at the bottom): as each whole frame goes on the layer,
-+ * read its counters from the surface (plain 8-bit surfaces only): top and bottom must
-+ * agree (else the frame is torn), and the frame shown before must still hold the
-+ * counter it had when it went up (else it was written while on screen). The marker
-+ * cell's flips are logged for input latency (QMP keys toggle it).
++ * OmacVM test hook (OMACVM_TEST_PACE_CHECK=1): as each whole frame goes on the layer, QEMU
++ * reads its surface (plain 8-bit or 10-bit surfaces: not the lossless ones, which nothing
++ * may read). Written while shown: the frame shown before must still hold the pixels it went
++ * up with (a 16 x 16 grid of them). With tests/graphics/pacing's page and its second
++ * counter strip at the bottom (8-bit): torn, the two counters differ; the steps between the
++ * frames' counters; and the marker cell's flips (QMP keys toggle it), for input latency.
 + */
 +static int present_pace_on = -1;
 +static struct {
-+    IOSurfaceRef recent[4];             /* shown before, newest first (retained) */
-+    uint64_t busy_older[4];             /* shows with 0, 1, 2, 3 older ones still in use */
-+    IOSurfaceRef prev;
-+    int prev_n;
++    IOSurfaceRef prev;                  /* shown before (retained) */
++    uint64_t prev_hash;
 +    int last_n, mark;
 +    uint64_t shown, unread, torn, overwritten, steps[4];   /* steps: 0, 1, 2, more */
 +    int64_t log_ns;
@@ -239,26 +469,42 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
 +    return v;
 +}
 +
-+static bool present_pace_read(IOSurfaceRef s, int *top, int *bottom, int *mark)
++/* The grid's hash, and the page's counters and marker (-1: none). False: not readable. */
++static bool present_pace_read(IOSurfaceRef s, uint64_t *hash, int *top, int *bottom, int *mark)
 +{
-+    if (IOSurfaceGetPixelFormat(s) != 'BGRA' ||
++    OSType fmt = IOSurfaceGetPixelFormat(s);
++    if ((fmt != 'BGRA' && fmt != 'l10r') ||
 +        IOSurfaceLock(s, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess) {
 +        return false;
 +    }
 +    const uint8_t *base = IOSurfaceGetBaseAddress(s);
 +    size_t bpr = IOSurfaceGetBytesPerRow(s), w = IOSurfaceGetWidth(s), h = IOSurfaceGetHeight(s);
++    uint64_t x = 1469598103934665603ull;
++    for (int i = 0; i < 16; i++) {
++        for (int j = 0; j < 16; j++) {
++            uint32_t v;
++            memcpy(&v, base + (h * (2 * i + 1) / 32) * bpr + (w * (2 * j + 1) / 32) * 4, 4);
++            x = (x ^ v) * 1099511628211ull;
++        }
++    }
++    *hash = x;
 +    double cell = w / 24.0;
-+    *top = present_pace_strip(base, bpr, w, h, 1.5 * cell);
-+    *bottom = present_pace_strip(base, bpr, w, h, h - 1.5 * cell);
-+    int m = present_pace_lum(base, bpr, w, h, 1.5 * cell, 2.7 * cell);
-+    *mark = m < 0 ? -1 : m > 128;
++    *top = *bottom = *mark = -1;
++    if (fmt == 'BGRA') {
++        *top = present_pace_strip(base, bpr, w, h, 1.5 * cell);
++        *bottom = present_pace_strip(base, bpr, w, h, h - 1.5 * cell);
++        int m = present_pace_lum(base, bpr, w, h, 1.5 * cell, 2.7 * cell);
++        *mark = m < 0 ? -1 : m > 128;
++    }
 +    IOSurfaceUnlock(s, kIOSurfaceLockReadOnly, NULL);
 +    return true;
 +}
 +
 +static void present_pace_check(IOSurfaceRef s)
 +{
++    uint64_t hash;
 +    int top, bottom, mark;
++
 +    if (present_pace_on < 0) {
 +        present_pace_on = getenv("OMACVM_TEST_PACE_CHECK") != NULL;
 +    }
@@ -267,16 +513,16 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
 +    }
 +    os_unfair_lock_lock(&present_pace_lock);
 +    present_pace.shown++;
-+    if (present_pace.prev && present_pace.prev != s && present_pace.prev_n >= 0) {
++    if (present_pace.prev && present_pace.prev != s) {
++        uint64_t ph;
 +        int pt, pb, pm;
-+        if (present_pace_read(present_pace.prev, &pt, &pb, &pm) && pt >= 0 && pt != present_pace.prev_n) {
++        if (present_pace_read(present_pace.prev, &ph, &pt, &pb, &pm) && ph != present_pace.prev_hash) {
 +            present_pace.overwritten++;
 +        }
 +    }
-+    if (!present_pace_read(s, &top, &bottom, &mark) || top < 0) {
++    if (!present_pace_read(s, &hash, &top, &bottom, &mark)) {
 +        present_pace.unread++;
-+        top = -1;
-+    } else {
++    } else if (top >= 0) {
 +        if (bottom >= 0 && bottom != top) {
 +            present_pace.torn++;
 +        }
@@ -288,48 +534,23 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
 +        if (mark >= 0 && present_pace.mark >= 0 && mark != present_pace.mark) {
 +            info_report("cocoa: pace-check: marker %d shown", mark);
 +        }
-+        if (mark >= 0) {
-+            present_pace.mark = mark;
-+        }
++        present_pace.mark = mark;
 +    }
-+    int busy = 0;
-+    for (int i = 0; i < 4; i++) {
-+        bool seen = false;
-+        for (int j = 0; j < i; j++) {
-+            seen |= present_pace.recent[j] == present_pace.recent[i];
-+        }
-+        busy += !seen && present_pace.recent[i] && present_pace.recent[i] != s &&
-+                IOSurfaceIsInUse(present_pace.recent[i]);
++    if (present_pace.prev) {
++        CFRelease(present_pace.prev);
 +    }
-+    present_pace.busy_older[MIN(busy, 3)]++;
-+    if (present_pace.recent[0] != s) {
-+        if (present_pace.recent[3]) {
-+            CFRelease(present_pace.recent[3]);
-+        }
-+        memmove(&present_pace.recent[1], &present_pace.recent[0], 3 * sizeof(IOSurfaceRef));
-+        present_pace.recent[0] = (IOSurfaceRef)CFRetain(s);
-+    }
-+    if (present_pace.prev != s) {
-+        if (present_pace.prev) {
-+            CFRelease(present_pace.prev);
-+        }
-+        present_pace.prev = (IOSurfaceRef)CFRetain(s);
-+    }
-+    present_pace.prev_n = top;
++    present_pace.prev = (IOSurfaceRef)CFRetain(s);
++    present_pace.prev_hash = hash;
 +    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
 +    if (!present_pace.log_ns) {
 +        present_pace.log_ns = now;
 +    } else if (now - present_pace.log_ns >= 5 * NANOSECONDS_PER_SECOND) {
-+        info_report("cocoa: pace-check: %" PRIu64 " shown, %" PRIu64 " unread, %" PRIu64
++        info_report("cocoa: pace-check: %" PRIu64 " shown, %" PRIu64 " not readable, %" PRIu64
 +                    " torn, %" PRIu64 " written while shown; counter steps 0/1/2/more: %"
-+                    PRIu64 "/%" PRIu64 "/%" PRIu64 "/%" PRIu64 "; older buffers still in use at a "
-+                    "show 0/1/2/3: %" PRIu64 "/%" PRIu64 "/%" PRIu64 "/%" PRIu64 " in 5 s",
++                    PRIu64 "/%" PRIu64 "/%" PRIu64 "/%" PRIu64 " in 5 s",
 +                    present_pace.shown, present_pace.unread, present_pace.torn,
 +                    present_pace.overwritten, present_pace.steps[0], present_pace.steps[1],
-+                    present_pace.steps[2], present_pace.steps[3], present_pace.busy_older[0],
-+                    present_pace.busy_older[1], present_pace.busy_older[2],
-+                    present_pace.busy_older[3]);
-+        memset(present_pace.busy_older, 0, sizeof(present_pace.busy_older));
++                    present_pace.steps[2], present_pace.steps[3]);
 +        present_pace.shown = present_pace.unread = present_pace.torn = present_pace.overwritten = 0;
 +        memset(present_pace.steps, 0, sizeof(present_pace.steps));
 +        present_pace.log_ns = now;
@@ -337,18 +558,127 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
 +    os_unfair_lock_unlock(&present_pace_lock);
 +}
 +
++/*
++ * QEMU thread: SURF (retained and in use until shown or dropped) goes to the layer once
++ * the GPU is done with it: SYNC (QEMU's draw into it, present_ctx) or GFENCE (the guest's
++ * last write, a direct frame; through OPS). READ_SURF (retained, in use) is the guest's
++ * IOSurface a draw read: given back then.
++ */
++static void cocoa_gl_present_send(IOSurfaceRef surf, GLsync sync, void *gfence,
++                                  const DisplayGLIOSurfaceOps *ops, IOSurfaceRef read_surf,
++                                  GLint filter, bool linear)
++{
++    double flushed = CACurrentMediaTime();
++
++    CFRetain(surf);
++    if (present_vsync) {
++        os_unfair_lock_lock(&present_lock);
++        present_sync.inflight++;
++        os_unfair_lock_unlock(&present_lock);
++    }
++    /* Core Animation must not see the surface before the GPU wrote it. */
++    IOSurfaceIncrementUseCount(surf);
++    dispatch_async(present_queue, ^{
++        CGLSetCurrentContext(present_wait_ctx);
++        if (sync) {
++            /*
++             * Apple's glClientWaitSync spins a core until the fence
++             * signals: test it, and nap 100 us between tests (the queue is
++             * user-interactive, so naps are not stretched). At most 1 s,
++             * as before.
++             */
++            for (int t = 0; t < 10000; t++) {
++                if (glClientWaitSync(sync, 0, 0) != GL_TIMEOUT_EXPIRED) {
++                    break;
++                }
++                g_usleep(100);
++            }
++            glDeleteSync(sync);
++        }
++        if (ops) {
++            ops->wait(gfence, false);
++        }
++        CGLSetCurrentContext(NULL);
++        if (read_surf) {
++            IOSurfaceDecrementUseCount(read_surf);
++            CFRelease(read_surf);
++        }
++        if (present_vsync) {
++            cocoa_gl_present_queue_frame((PresentFrame){
++                .surf = surf, .filter = filter, .flushed = flushed, .linear = linear,
++            });
++            return;
++        }
++        dispatch_async(dispatch_get_main_queue(), ^{
++            CALayer *layer = [cocoaView layer];
++            [CATransaction begin];
++            [CATransaction setDisableActions:YES];
++            NSString *f = filter == GL_LINEAR ? kCAFilterLinear : kCAFilterNearest;
++            [layer setMagnificationFilter:f];
++            [layer setMinificationFilter:f];
++            cocoa_gl_layer_follow(layer, surf, linear);
++            omacvm_present_gravity(layer, surf);
++            [layer setContents:(id)surf];
++            qatomic_set(&present_shown, surf);
++            present_tiles_whole_shown(layer, surf);
++            [CATransaction commit];
++            omacvm_park_frame_shown(flushed);
++            IOSurfaceDecrementUseCount(surf);
++            CFRelease(surf);
++        });
++    });
++    present_last_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
++    if (present_pv_back_ns) {
++        info_report("cocoa: present: first frame %.1f ms after the window was seen again",
++                    (present_last_ns - present_pv_back_ns) / 1e6);
++        present_pv_back_ns = 0;
++    }
++}
++
++/*
++ * QEMU thread, present_ctx current (PREV before): the guest's IOSurface GSURF (DEEP:
++ * 10-bit, PQ: shown as HDR) goes on the layer as it is.
++ */
++static bool cocoa_gl_present_direct(const DisplayGLTexture *texture, IOSurfaceRef gsurf,
++                                    bool deep, bool pq, GLint filter, CGLContextObj prev)
++{
++    CGLSetCurrentContext(prev);
++    gl_dirty = false;
++    present_direct_tag(gsurf, deep);
++    /* HDR only in full screen: whether the layer shows PQ now (as for drawn frames) */
++    int hf_pq = pq && present_color == 1;
++    if (hf_pq != qatomic_read(&omacvm_hf_pq)) {
++        if (hf_pq) {
++            qatomic_set(&omacvm_hf_pq_ns, qemu_clock_get_ns(QEMU_CLOCK_REALTIME));
++        }
++        qatomic_set(&omacvm_hf_pq, hf_pq);
++        qatomic_inc(&omacvm_hf_flips);
++    }
++    /* the present's surfaces miss this frame: the next drawn one is whole, tiles too */
++    omacvm_pd_all_full(&present_pd);
++    qatomic_set(&present_tiles_full, true);
++    cocoa_gl_present_send(gsurf, NULL, texture->iosurface_ops->fence(gl_scanout_id),
++                          texture->iosurface_ops, NULL, filter, false);
++    return true;
++}
++
+ /* QEMU thread, BQL held. Returns false when nothing could be shown. */
  static bool cocoa_gl_present(void)
  {
-     GLuint src;
-@@ -10254,6 +10545,7 @@
+@@ -10254,8 +10710,11 @@ static bool cocoa_gl_present(void)
          return true;
      }
  
++    /* the guest's buffer as an IOSurface (src is then its RECTANGLE texture) */
++    DisplayGLTexture texture = {};
 +    IOSurfaceRef gsurf = NULL;
      if (gl_scanout_borrow) {
-         DisplayGLTexture texture = gl_scanout_borrow(gl_scanout_id);
+-        DisplayGLTexture texture = gl_scanout_borrow(gl_scanout_id);
++        texture = gl_scanout_borrow(gl_scanout_id);
          if (!texture.id) {
-@@ -10264,6 +10556,7 @@
+             return false;
+         }
+@@ -10264,6 +10723,7 @@ static bool cocoa_gl_present(void)
          h = texture.height;
          /* The surface's first row is the top of the window. */
          flip = !texture.y_0_top;
@@ -356,67 +686,43 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
      } else if (omacvm_splash_wanted(NULL, surface)) {
          /* No picture of the guest's: the boot logo (or black), view-sized. */
          splash = true;
-@@ -10289,7 +10582,9 @@
+@@ -10289,7 +10749,9 @@ static bool cocoa_gl_present(void)
  
      /* A 10-bit scanout keeps its depth: half-float surfaces. */
      GLint ifmt = 0;
 -    if (src) {
 +    if (gsurf) {
-+        ifmt = GL_RGBA8;    /* virgl makes only 8-bit buffers IOSurfaces */
++        ifmt = IOSurfaceGetPixelFormat(gsurf) == 'l10r' ? GL_RGB10_A2 : GL_RGBA8;
 +    } else if (src) {
          glBindTexture(GL_TEXTURE_2D, src);
          glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &ifmt);
          glBindTexture(GL_TEXTURE_2D, 0);
-@@ -10367,7 +10662,39 @@
-      */
-     bool boost = present_linear;
-     int gain = qatomic_read(&omacvm_bright_gain_c);
-+
-+    /* OmacVM, present-direct-surface prototype: the guest's buffer as it is? */
-+    IOSurfaceRef direct = NULL;
-+    if (gsurf && present_direct_wanted()) {
-+        /* (only an 8-bit guest scanout is an IOSurface: never the boot logo or 10-bit) */
-+        int why = boost || linear ? PD_BRIGHT :
-+                  gl_scanout_x || gl_scanout_y || gl_scanout_w != w || gl_scanout_h != h ?
-+                      PD_REGION :
-+                  w != present_w || h != present_h ? PD_SCALED :
-+                  !flip ? PD_UPSIDE :
-+                  gsurf == present_direct_last ? PD_SAME :
-+                  present_tiles_wanted() ? PD_TILES : PD_DIRECT;
-+        present_direct_count(why);
-+        if (why == PD_DIRECT) {
-+            direct = gsurf;
-+            if (present_color == 1 && !IOSurfaceCopyValue(direct, kIOSurfaceColorSpace)) {
-+                /* sRGB, as the present's own surfaces */
-+                CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-+                CFPropertyListRef pl = CGColorSpaceCopyPropertyList(cs);
-+                IOSurfaceSetValue(direct, kIOSurfaceColorSpace, pl);
-+                CFRelease(pl);
-+                CGColorSpaceRelease(cs);
-+            } else if (present_color == 1) {
-+                CFRelease(IOSurfaceCopyValue(direct, kIOSurfaceColorSpace));
-+            }
-+            /* the present's surfaces miss this frame: each is drawn whole next */
-+            omacvm_pd_all_full(&present_pd);
-+        }
-+    }
-+    present_direct_last = gsurf;
- 
-+    unsigned n = 0;
-+    if (!direct) {
-     /* The next surface Core Animation is not showing or reading. */
-     unsigned i;
-     for (i = 0; i < present_nsurf; i++) {
-@@ -10389,7 +10716,7 @@
-                                  qatomic_read(&present_period_ns));
-         return true;
+@@ -10319,6 +10781,24 @@ static bool cocoa_gl_present(void)
+                     pq ? ", HDR (PQ)" : linear ? ", extra brightness" : "");
+         deep_logged = deep + 2 * linear;
      }
--    unsigned n = (present_next + i) % present_nsurf;
-+    n = (present_next + i) % present_nsurf;
-     present_next = (n + 1) % present_nsurf;
-     /* OmacVM: a volatile surface is made non-volatile before it is drawn into. */
-     if (omacvm_pv_needed(&present_pv, n)) {
-@@ -10441,7 +10768,7 @@
++    if (gsurf) {
++        int why = linear ? PD_BRIGHT : !flip ? PD_UPSIDE :
++                  gsurf == present_direct_last ? PD_SAME : PD_DIRECT;
++        present_direct_count(why);
++        /* only a buffer on the layer moves when written: a drawn one may change in place */
++        present_direct_last = why == PD_DIRECT || why == PD_SAME ? gsurf : NULL;
++        if (why == PD_SAME) {
++            /* on the layer already, nothing written since (a write moves it) */
++            CGLSetCurrentContext(prev);
++            gl_dirty = false;
++            return true;
++        }
++        if (why == PD_DIRECT) {
++            return cocoa_gl_present_direct(&texture, gsurf, deep, pq, filter, prev);
++        }
++    } else {
++        present_direct_last = NULL;
++    }
+     if (!cocoa_gl_present_alloc(w, h, deep, linear)) {
+         if (!(deep || linear) || !cocoa_gl_present_alloc(w, h, false, false)) {
+             CGLSetCurrentContext(prev);
+@@ -10441,7 +10921,7 @@ static bool cocoa_gl_present(void)
       * OmacVM: the tiled present (present_tiles_on). Before surface n is
       * taken: a frame in tiles leaves it untouched for the next whole frame.
       */
@@ -425,20 +731,40 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
          !present_pd_unflushed && !splash && !boost && gl_scanout_borrow &&
          w == present_w && h == present_h &&
          gl_scanout_x == 0 && gl_scanout_y == 0 &&
-@@ -10534,7 +10861,11 @@
+@@ -10502,6 +10982,7 @@ static bool cocoa_gl_present(void)
+                     pd.w, pd.h, w, h);
+     }
+ 
++    IOSurfaceRef read_surf = NULL;   /* the guest's IOSurface the draw reads */
+     glBindFramebuffer(GL_FRAMEBUFFER, present_fbo);
+     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                            GL_TEXTURE_RECTANGLE, present_tex[n], 0);
+@@ -10534,7 +11015,23 @@ static bool cocoa_gl_present(void)
                                                                 : GL_LINEAR;
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, blit_filter);
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, blit_filter);
 -        if (!boost || !omacvm_bright_blit(flip, linear ? gain : OMACVM_BRIGHT_ONE, pq)) {
 +        if (gsurf) {
-+            /* prototype: from the guest's IOSurface (no extra brightness) */
++            /*
++             * From the guest's IOSurface, after its writes; it stays in use until the
++             * draw is done (the guest's next write moves it then).
++             */
 +            glBindTexture(GL_TEXTURE_2D, 0);
-+            present_rect_blit(gsurf, flip, blit_filter);
++            omacvm_iosurface_wait(&texture, gl_scanout_id, true);
++            GLuint tex = omacvm_iosurface_texture(gsurf);
++            if (tex) {
++                read_surf = gsurf;
++                CFRetain(read_surf);
++                IOSurfaceIncrementUseCount(read_surf);
++                omacvm_rect_draw(tex, w, h, flip, blit_filter,
++                                 boost ? (linear ? gain : OMACVM_BRIGHT_ONE) : 0, pq);
++                glDeleteTextures(1, &tex);
++            }
 +        } else if (!boost || !omacvm_bright_blit(flip, linear ? gain : OMACVM_BRIGHT_ONE, pq)) {
              qemu_gl_run_texture_blit(present_gls, flip);
          }
          if (!gl_scanout_borrow && omacvm_console_check_on()) {
-@@ -10543,23 +10874,31 @@
+@@ -10543,7 +11040,7 @@ static bool cocoa_gl_present(void)
      }
      glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
      glDisable(GL_SCISSOR_TEST);
@@ -447,46 +773,76 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
          (present_pd_check_burst ? present_pd_check_burst-- : ++present_pd_frames_part % 30 == 1)) {
          cocoa_gl_present_pd_check(src, flip, n, pd);
      }
-     glBindTexture(GL_TEXTURE_2D, 0);
-     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-+    }
-+    /*
-+     * Drawn: Core Animation must not see the surface before the GPU wrote it. Direct:
-+     * nor the guest's buffer before the guest's GPU work on it is done (flushed above
-+     * from the guest's context, before this fence in a context of the same group).
-+     */
-     GLsync sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-     glFlush();
-     CGLSetCurrentContext(prev);
+@@ -10555,67 +11052,11 @@ static bool cocoa_gl_present(void)
      gl_dirty = false;
  
--    IOSurfaceRef surf = present_surf[n];
-+    IOSurfaceRef surf = direct ? direct : present_surf[n];
-     double flushed = CACurrentMediaTime();
--    /* OmacVM, tiles: this whole frame is what the tiles lie over now. */
--    present_base_gen = present_alloc_gen;
--    present_td = (OmacvmPDRect){ 0, 0, 0, 0 };
--    qatomic_set(&present_tiles_full, false);
-+    if (!direct) {
-+        /* OmacVM, tiles: this whole frame is what the tiles lie over now. */
-+        present_base_gen = present_alloc_gen;
-+        present_td = (OmacvmPDRect){ 0, 0, 0, 0 };
-+        qatomic_set(&present_tiles_full, false);
-+    }
-     CFRetain(surf);
-     if (present_vsync) {
-         os_unfair_lock_lock(&present_lock);
-@@ -10588,7 +10927,8 @@
-         CGLSetCurrentContext(NULL);
-         if (present_vsync) {
-             cocoa_gl_present_queue_frame((PresentFrame){
+     IOSurfaceRef surf = present_surf[n];
+-    double flushed = CACurrentMediaTime();
+     /* OmacVM, tiles: this whole frame is what the tiles lie over now. */
+     present_base_gen = present_alloc_gen;
+     present_td = (OmacvmPDRect){ 0, 0, 0, 0 };
+     qatomic_set(&present_tiles_full, false);
+-    CFRetain(surf);
+-    if (present_vsync) {
+-        os_unfair_lock_lock(&present_lock);
+-        present_sync.inflight++;
+-        os_unfair_lock_unlock(&present_lock);
+-    }
+-    /* Core Animation must not see the surface before the GPU wrote it. */
+-    IOSurfaceIncrementUseCount(surf);
+-    dispatch_async(present_queue, ^{
+-        CGLSetCurrentContext(present_wait_ctx);
+-        if (sync) {
+-            /*
+-             * Apple's glClientWaitSync spins a core until the fence
+-             * signals: test it, and nap 100 us between tests (the queue is
+-             * user-interactive, so naps are not stretched). At most 1 s,
+-             * as before.
+-             */
+-            for (int t = 0; t < 10000; t++) {
+-                if (glClientWaitSync(sync, 0, 0) != GL_TIMEOUT_EXPIRED) {
+-                    break;
+-                }
+-                g_usleep(100);
+-            }
+-            glDeleteSync(sync);
+-        }
+-        CGLSetCurrentContext(NULL);
+-        if (present_vsync) {
+-            cocoa_gl_present_queue_frame((PresentFrame){
 -                .surf = surf, .filter = filter, .flushed = flushed, .linear = boost,
-+                .surf = surf, .filter = filter, .flushed = flushed, .linear = boost && !direct,
-+                .direct = direct != NULL,
-             });
-             return;
-         }
-@@ -10954,6 +11294,7 @@
+-            });
+-            return;
+-        }
+-        dispatch_async(dispatch_get_main_queue(), ^{
+-            CALayer *layer = [cocoaView layer];
+-            [CATransaction begin];
+-            [CATransaction setDisableActions:YES];
+-            NSString *f = filter == GL_LINEAR ? kCAFilterLinear : kCAFilterNearest;
+-            [layer setMagnificationFilter:f];
+-            [layer setMinificationFilter:f];
+-            cocoa_gl_layer_follow(layer, surf, boost);
+-            omacvm_present_gravity(layer, surf);
+-            [layer setContents:(id)surf];
+-            qatomic_set(&present_shown, surf);
+-            present_tiles_whole_shown(layer, surf);
+-            [CATransaction commit];
+-            omacvm_park_frame_shown(flushed);
+-            IOSurfaceDecrementUseCount(surf);
+-            CFRelease(surf);
+-        });
+-    });
+-    present_last_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+-    if (present_pv_back_ns) {
+-        info_report("cocoa: present: first frame %.1f ms after the window was seen again",
+-                    (present_last_ns - present_pv_back_ns) / 1e6);
+-        present_pv_back_ns = 0;
+-    }
++    cocoa_gl_present_send(surf, sync, NULL, NULL, read_surf, filter, boost);
+     return true;
+ }
+ 
+@@ -10954,6 +11395,7 @@ static void present_frame_show(PresentFrame *f)
          cocoa_gl_present_show_tiles(f);
      } else if (f->surf) {
          cocoa_gl_present_show(f->surf, f->filter, f->flushed, f->linear);
@@ -494,25 +850,25 @@ Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
      }
  }
  
---- a/include/ui/console.h
-+++ b/include/ui/console.h
-@@ -99,6 +99,7 @@
-     uint32_t width;
-     uint32_t height;
-     void *d3d_tex2d;
-+    void *iosurface;    /* OmacVM: the buffer is this IOSurface (macOS), or NULL */
- } DisplayGLTexture;
+@@ -12594,10 +13036,17 @@ static void omacvm_head_render(OmacVMHead *hd, NSSize size)
+     if (hd->borrow) {
+         DisplayGLTexture texture = hd->borrow(hd->scanout_id);
  
- typedef DisplayGLTexture (*DisplayGLTextureBorrower)(uint32_t id);
---- a/hw/display/virtio-gpu-virgl.c
-+++ b/hw/display/virtio-gpu-virgl.c
-@@ -602,6 +602,9 @@
-     texture.width = info.width;
-     texture.height = info.height;
-     texture.id = info.tex_id;
-+#ifdef __APPLE__
-+    texture.iosurface = virgl_renderer_resource_get_iosurface(id);
-+#endif
- 
-     return texture;
- }
+-        glBindTexture(GL_TEXTURE_2D, texture.id);
+-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+-        qemu_gl_run_texture_blit(dgc.gls, texture.y_0_top);
++        if (texture.iosurface) {
++            /* an IOSurface buffer: its RECTANGLE texture, after the guest's writes */
++            omacvm_iosurface_wait(&texture, hd->scanout_id, true);
++            omacvm_rect_draw(texture.id, texture.width, texture.height, texture.y_0_top,
++                             filter, 0, false);
++        } else {
++            glBindTexture(GL_TEXTURE_2D, texture.id);
++            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
++            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
++            qemu_gl_run_texture_blit(dgc.gls, texture.y_0_top);
++        }
+     } else if (omacvm_splash_wanted(NULL, hd->surface)) {
+         omacvm_splash_draw(size.width, size.height, !omacvm_desktop_up);
+     } else if (hd->surface && hd->surface->texture) {
