@@ -3,7 +3,8 @@
 A key on a Chromium page that redraws at 120 frames a second reached QEMU's layer 43 to 58 ms after QEMU
 got it (median 55 over 16 runs), against 7 to 17 ms in a terminal or on a still page. Frame queues in
 Chromium, Hyprland and QEMU hold most of it. Chromium's own queue is the cheapest to cut:
-`--double-buffer-compositing` takes about 10 ms off (branch `chromium-double-buffer`).
+`--double-buffer-compositing` takes about 10 ms off. OmacVM.app's guest install puts it into the flags file
+of each Chromium-based browser and of Electron (`src/app/guest/install.sh`).
 
 ## How it was measured
 
@@ -83,8 +84,8 @@ to 14.4 of the 16.8 ms.
 In one VM start, A B B A, twice, with the switch on Chromium's command line: without it 57.0, 52.2, 57.0
 and 48.6 ms, with it 41.2, 44.6, 43.5 and 44.2 ms (medians of 60 keys). The page drew 118.2 to 119.9 frames
 a second either way; frames skipped on the layer were 3, 12, 10 and 5 without and 0, 1, 0 and 0 with it.
-Through Arch's launcher reading `/etc/chromium-flags.conf` (the branch's `src/app/guest/install.sh`, the
-switch in Chromium's command line in the trace): 55.6 and 56.0 ms without, 46.5 and 44.8 with it; a still
+Through Arch's launcher reading the switch from a flags file (the switch in Chromium's command line in the
+trace): 55.6 and 56.0 ms without, 46.5 and 44.8 with it; a still
 page 10.8 and 10.9. QEMU's queue wait moves with the guest's phase and was not lower with the switch (6.4
 to 9.3 ms a run without, 6.1 to 9.3 with it); the gain is Chromium's swap.
 
