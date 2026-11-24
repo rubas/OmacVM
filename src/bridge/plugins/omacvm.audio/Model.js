@@ -166,15 +166,33 @@ function optionCursor(group, from, delta) {
 // AirPods. A press of a row answers with the list as it stands, where macOS
 // often keeps those modes closed, and a read on its way may have begun
 // before the headphones played.
-// asked: the uid of the output this opening last read the list for, "" after
-// a press of a row answered with a list, or null before the opening's first
-// read.
+// asked: the uid of the output this opening last read the list for, "" when
+// its list may lack the modes of headphones, or null before the opening's
+// first read (listAnswered).
+// told: the Mac's output as the app's last answer named it. Past the
+// opening's first read, the panel reads only while the Bridge reports that
+// output too: until both name it, one of them has not seen the Mac's last
+// switch, and a read would be for an output that no longer plays. The one
+// that reports it last asks again (Panel.qml asks the app for its state
+// while the two name other outputs).
 // Answers the uid to read the list for now ("" without an output), or null:
 // no read.
-function listRead(asked, output) {
+function listRead(asked, output, told) {
   var uid = output ? String(output.uid || "") : ""
   if (asked === null) return uid
-  return output && output.transport === "bluetooth" && uid !== asked ? uid : null
+  return output && output.transport === "bluetooth" && uid !== asked && uid === told ? uid : null
+}
+
+// asked for listRead once the app answered a request: "press" when a press
+// of a row answered with a list, "list" when a read or a mode did, "" for
+// anything else (the state, a failure); told: the Mac's output as the answer
+// names it. A press's list may lack the modes of headphones, and so may a
+// read's or a mode's when its answer names another output than the one the
+// panel last read the list for: the Mac switched meanwhile. A request of the
+// last opening leaves this opening's first read to come.
+function listAnswered(asked, request, told) {
+  if (asked === null) return null
+  return request === "press" || (request === "list" && told !== asked) ? "" : asked
 }
 
 // Why a read or a press of macOS's Sound list did not work, by the app's code.
@@ -203,6 +221,7 @@ if (typeof module !== "undefined") {
     outputStops: outputStops,
     optionCursor: optionCursor,
     listRead: listRead,
+    listAnswered: listAnswered,
     soundFailureText: soundFailureText,
     clamp01: clamp01
   }

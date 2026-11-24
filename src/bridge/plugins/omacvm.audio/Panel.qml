@@ -90,8 +90,8 @@ Panel {
   property int optionIndex: -1
 
   // The output the panel last read macOS's Sound list for in this opening,
-  // "" after a press of a row answered with a list, or null before its first
-  // read (Model.listRead).
+  // "" when its list may lack the modes of headphones, or null before its
+  // first read (Model.listRead, Model.listAnswered).
   property var listOutput: null
   // The balance the app read for the output that plays now.
   readonly property bool showBalance: available && sound.available && !!sound.balance && !!output && output.uid === sound.output
@@ -130,7 +130,8 @@ Panel {
     function onAudioChanged() {
       if (!outputVolumeSend.running && !outputVolumeProc.running) root.pendingOutputVolume = -1
       if (!inputVolumeSend.running && !inputVolumeProc.running) root.pendingInputVolume = -1
-      // Another output has another balance, or none.
+      // Another output has another balance, or none, and its modes are read
+      // only once the app names it too.
       if (root.opened && sound.available && root.output && root.output.uid !== sound.output) sound.refresh()
       root.refreshDisplayModels()
       // Headphones that play now may have modes, which only a read has.
@@ -141,10 +142,10 @@ Panel {
 
   Connections {
     target: sound
-    function onAnswered(pressed) {
-      // Its list may lack the modes of headphones that play after it. A press
-      // of the last opening leaves this one's first read to come.
-      if (pressed && root.listOutput !== null) root.listOutput = ""
+    function onAnswered(request) {
+      root.listOutput = Model.listAnswered(root.listOutput, request, sound.output)
+      // An answer may name the output from before the Bridge's last report.
+      if (request !== "" && root.opened && root.output && root.output.uid !== sound.output) sound.refresh()
       root.refreshDisplayModels()
       root.askForList()
     }
@@ -171,7 +172,7 @@ Panel {
   // last opening.
   function askForList() {
     if (!opened || !available || !sound.available || !sound.accessibility) return
-    var uid = Model.listRead(listOutput, output)
+    var uid = Model.listRead(listOutput, output, sound.output)
     if (uid !== null && sound.read()) listOutput = uid
   }
 
