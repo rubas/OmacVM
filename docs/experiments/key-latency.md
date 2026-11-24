@@ -26,7 +26,8 @@ commits, render start, the fence wait of its atomic commit, the flush and the vb
 kprobes on the kernel). Chromium's trace (`LINUX_CLOCK_MONOTONIC`) has the key handler and each frame's
 pipeline stages. The guest and host clocks were tied together from both directions, the key into the guest
 and the flush out of it, to within 0.03 to 0.11 ms. Chromium's presentation time of the marked frame equals
-the guest vblank after the flush the chain picked, for every key. Tracing moved the total by less than the
+the guest vblank after the flush the chain picked to within 1 us for 598 of 600 keys (the other 2 are a
+refresh apart). Tracing moved the total by less than the
 run-to-run spread (52 to 57 ms traced, 54 to 58 untraced).
 
 ## The stages
@@ -59,14 +60,15 @@ to 14.4 of the 16.8 ms.
 ## Why the queues hold frames
 
 - Chromium commits a finished buffer only after Hyprland's frame callback for the one before
-  (`ui/ozone/platform/wayland/host/wayland_frame_manager.cc:181`), and Viz lets up to two swaps wait
-  for that: three buffers, `max_pending_swaps` = 2
-  (`components/viz/service/display_embedder/skia_output_device_buffer_queue.cc:174,189-192`). On a page that
+  (`ui/ozone/platform/wayland/host/wayland_frame_manager.cc:174` in 157.0.8103.78), and Viz lets up to
+  two swaps wait for that: three buffers, `max_pending_swaps` = 2
+  (`components/viz/service/display_embedder/skia_output_device_buffer_queue.cc:168,183-186`). On a page that
   draws every refresh both slots stay full, so a frame waits about two refreshes (15.4 ms).
   `--double-buffer-compositing` makes it two buffers and one waiting swap (6.9 ms).
 - Hyprland renders as soon as the guest's vblank comes (`src/output/MonitorFrameScheduler.cpp:106` in
-  0.57.2) and sends the frame callbacks from inside that render, after it built the frame
-  (`src/render/Renderer.cpp:2453`; 0.56.2 has the same order). Chromium's waiting buffer arrives 0.2 to
+  0.57.2) and sends each surface's frame callback while it draws that surface into the frame
+  (`IElementRenderer::drawSurface` calls `presentFeedback`, `src/render/ElementRenderer.cpp:432`;
+  `:391` in 0.56.2). Chromium's waiting buffer arrives 0.2 to
   0.3 ms later and waits for the next vblank (7 to 8 ms). A client that draws only after the key, like foot or
   a still page, is not behind a callback and lands in the next render (0.2 ms).
 - QEMU's jitter buffer (ADR 0020) shows a frame at the first commit 3 ms before a vsync. The guest's

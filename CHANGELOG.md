@@ -6,10 +6,10 @@ in more words.
 ## Unreleased
 
 - **Keys show sooner in Chromium while a page moves.** Chromium in the VM now keeps one finished frame
-  waiting instead of two, so on a page that animates or scrolls a key reaches the screen about 10 ms
-  sooner at 120 Hz (46 ms instead of 56 to the frame in a test VM; a still page and the terminal stay at
-  7 to 11 ms). A page that keeps the GPU busy for the whole refresh draws a few frames a second fewer.
-  It needs Update VM. How the time splits: [docs/experiments/key-latency.md](docs/experiments/key-latency.md).
+  waiting instead of two, so on a page that animates a key reaches the screen about 10 ms sooner at
+  120 Hz (46 ms instead of 56 to the frame in a test VM). Typing on a still page or in a terminal stays
+  as it was. A page that keeps the GPU busy for the whole refresh draws a few frames a second fewer. It
+  needs Update VM. How the time splits: [docs/experiments/key-latency.md](docs/experiments/key-latency.md).
 - **AirPlay and balance in the Audio panel.** The Audio panel in Omarchy's bar now lists the Mac's
   AirPlay speakers and TVs after the Mac's own outputs, so you can click to switch.
   When the Mac's current output supports it, such as
