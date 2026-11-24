@@ -136,7 +136,8 @@ beside the sliders and one output list:
   for, as the Mac switched meanwhile; never on a timer. That second read
   waits until the Bridge and the app's last answer name the same output:
   the Bridge may report a switch after the app's answer, and a read before
-  it would be for an output that no longer plays. Until the answer it shows the list of
+  it would be for an output that no longer plays. While the two differ, the
+  panel asks the app for its state. Until the answer it shows the list of
   the last opening. The cost is the owner's choice: for about a second after
   the panel opens, the Mac's keyboard is Control Center's.
 - The speaker's own row has the checkmark, as on the Mac. CoreAudio's one
