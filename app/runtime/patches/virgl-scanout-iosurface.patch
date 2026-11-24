@@ -1,13 +1,15 @@
 virglrenderer: scanout buffers as IOSurfaces, for QEMU's direct present
 
 What: a single-level 2D buffer the guest makes for scanout (VIRGL_RES_BIND_SCANOUT)
-in an 8-bit (BGRX, BGRA) or 10-bit (B10G10R10X2, B10G10R10A2) format lives in an
-IOSurface ('BGRA' or 'l10r'), bound as a GL_TEXTURE_RECTANGLE texture: framebuffers
+in an 8-bit (BGRX, BGRA) or 10-bit (B10G10R10X2, B10G10R10A2) format, and not one of
+QEMU's own 2D resources (y_0_top: the boot console's), lives in an IOSurface ('BGRA'
+or 'l10r'), bound as a GL_TEXTURE_RECTANGLE texture: framebuffers
 write and read it as before, and QEMU puts the IOSurface itself on the window
 (omacvm-cocoa-present-direct.patch). Apple's GL binds an IOSurface only as a
 RECTANGLE texture, so samplers read a 2D shadow, copied when a draw samples the
 buffer after it changed (its view swizzle as for a texture its views share); the
-shader blitter reads the shadow too.
+shader blitter reads the shadow too (and gets the shadow's swizzle back), and the
+cursor readback reads a RECTANGLE texture.
 The guest's page flip completes in the guest without waiting for the Mac, so the
 guest may draw into a buffer that QEMU still queues, that is on the window, or that
 WindowServer still holds (it keeps the frame shown before the current one). Every
@@ -16,13 +18,14 @@ clear of it, blits, copies and uploads into it): the first write after QEMU took
 buffer for the screen (borrow_texture_for_scanout) moves a buffer still in use to a
 free IOSurface with its picture copied on the GPU, as the guest redraws only what
 changed; framebuffers attach it again. Spares are charged to the guest's GPU memory
-budget as display memory, the shadow too; with three spares all in use the oldest is
-let go (WindowServer frees it when done) for a new one. Only when the budget refuses
-a spare does a write wait, at most 25 ms, and qemu.log counts what was then written
-in use.
+budget as display memory, the shadow too (past the budget a spare is made all the
+same: at most three a buffer, as nothing may write a buffer on screen); with three
+spares all in use the oldest is let go (WindowServer frees it when done) for a new
+one. Nothing waits.
 QEMU waits for a fence made after the guest's last write into the buffer (at the end
-of each submit or upload, in the writing context) before the buffer goes on the
-window: the guest's contexts and QEMU's are different GL contexts.
+of each submit or upload and before a plain switch of GL contexts, in the writing
+context) before the buffer goes on the window: the guest's contexts and QEMU's are
+different GL contexts. A shadow copied in one context is waited for in another.
 New entry points: virgl_renderer_resource_get_iosurface,
 virgl_renderer_resource_iosurface_fence, virgl_renderer_iosurface_fence_wait.
 qemu.log every 5 s while moves, waits or shadow copies happen.
@@ -167,17 +170,16 @@ index f2f7b2f..5670491 100644
  {
     IOSurfaceRef surface = (IOSurfaceRef)iosurface;
 diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
-index 354eb66..fcce4ba 100644
+index 354eb66..d7a9659 100644
 --- a/src/vrend/vrend_renderer.c
 +++ b/src/vrend/vrend_renderer.c
-@@ -166,6 +166,42 @@ static struct { uint64_t woken, late, timed_out, stray; } fence_busy_stats;
+@@ -166,6 +166,53 @@ static struct { uint64_t woken, late, timed_out, stray; } fence_busy_stats;
  
  /* OmacVM: counts command buffers; a Venus image shown by copy is read at most once per buffer */
  static uint64_t vrend_submit_serial = 1;
 +#ifdef ENABLE_METAL
 +/* OmacVM: scanout buffers as IOSurfaces (vrend_scanout_*, below) */
 +#define VREND_SCANOUT_SPARES 3
-+#define VREND_SCANOUT_WAIT_US 25000
 +
 +struct vrend_scanout_fence {
 +   GLsync sync;
@@ -188,6 +190,7 @@ index 354eb66..fcce4ba 100644
 +   void *surface;              /* the IOSurface gl_id stands on (retained; atomic) */
 +   void *spare[VREND_SCANOUT_SPARES];   /* moved out of, maybe still in use (retained) */
 +   unsigned next_drop;         /* the spare let go next when all are in use */
++   unsigned spare_charged;     /* the spares charged to the budget (a bit each) */
 +   GLenum internal, format, type;
 +   uint32_t fourcc;
 +   uint64_t bytes;             /* one IOSurface */
@@ -197,6 +200,7 @@ index 354eb66..fcce4ba 100644
 +   uint64_t gen;               /* writes */
 +   uint64_t shadow_gen;        /* the writes the shadow holds */
 +   GLuint shadow;
++   GLsync shadow_sync;         /* after the shadow's last copy (another context waits for it) */
 +   GLint shadow_swizzle[4];    /* the swizzle set on the shadow, -1: unknown */
 +   bool fence_due;             /* written since its last fence (in vrend_scanout_due) */
 +   struct vrend_scanout_fence *fence;   /* after the last write (vrend_scanout_fence_lock) */
@@ -210,10 +214,20 @@ index 354eb66..fcce4ba 100644
 +static inline bool vrend_view_reads_texture(const struct vrend_sampler_view *view);
 +static void vrend_scanout_free(struct vrend_resource *res);
 +#endif
++
++/*
++ * OmacVM: a plain switch of GL contexts (no GPU wait, unlike vrend_sync_make_current) first
++ * fences the scanout IOSurfaces written in the context it leaves: QEMU waits for that fence.
++ */
++static inline void vrend_make_current_fenced(virgl_gl_context gl_context)
++{
++   vrend_renderer_scanout_fences_make();
++   vrend_clicbs->make_current(gl_context);
++}
  
  /* Called by virgl_renderer_submit_cmd(2) around a context's command buffer. */
  void vrend_renderer_submit_begin(void)
-@@ -178,6 +214,8 @@ void vrend_renderer_submit_begin(void)
+@@ -178,6 +225,8 @@ void vrend_renderer_submit_begin(void)
  
  void vrend_renderer_submit_end(void)
  {
@@ -222,7 +236,7 @@ index 354eb66..fcce4ba 100644
  #ifdef __APPLE__
     atomic_store_explicit(&render_idle_at, mach_absolute_time(), memory_order_relaxed);
     /* seq_cst on purpose: see fence_wait_render. */
-@@ -1078,6 +1116,8 @@ struct vrend_sub_context {
+@@ -1078,6 +1127,8 @@ struct vrend_sub_context {
  
     uint32_t cond_render_q_id;
     GLenum cond_render_gl_mode;
@@ -231,7 +245,7 @@ index 354eb66..fcce4ba 100644
  
     struct vrend_image_view image_views[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_IMAGES];
     uint32_t images_used_mask[PIPE_SHADER_TYPES];
-@@ -1658,7 +1698,11 @@ vrend_surface_reference(struct vrend_surface **ptr, struct vrend_surface *surf)
+@@ -1658,7 +1709,11 @@ vrend_surface_reference(struct vrend_surface **ptr, struct vrend_surface *surf)
  
  static void vrend_destroy_sampler_view(struct vrend_sampler_view *samp)
  {
@@ -243,7 +257,7 @@ index 354eb66..fcce4ba 100644
        glDeleteTextures(1, &samp->gl_id);
     vrend_resource_reference(&samp->texture, NULL);
     free(samp);
-@@ -3566,6 +3610,11 @@ int vrend_create_sampler_view(struct vrend_context *ctx,
+@@ -3566,6 +3621,11 @@ int vrend_create_sampler_view(struct vrend_context *ctx,
     vrend_resource_reference(&view->texture, res);
  
     view->gl_id = view->texture->gl_id;
@@ -255,7 +269,7 @@ index 354eb66..fcce4ba 100644
  
     if (view->target == PIPE_BUFFER) {
        view->target = view->texture->target;
-@@ -3939,6 +3988,10 @@ static void vrend_hw_set_color_surface(struct vrend_sub_context *sub_ctx, GLuint
+@@ -3939,6 +3999,10 @@ static void vrend_hw_set_color_surface(struct vrend_sub_context *sub_ctx, GLuint
        vrend_fb_bind_texture_id(surf->texture, surf->gl_id, index, surf->level,
                                 first_layer != last_layer ? -1 : (GLint)first_layer,
                                 surf->nr_samples);
@@ -266,7 +280,7 @@ index 354eb66..fcce4ba 100644
     }
  }
  
-@@ -4975,8 +5028,13 @@ static uint32_t vrend_view_key_bits(struct vrend_sampler_view *view)
+@@ -4975,8 +5039,13 @@ static uint32_t vrend_view_key_bits(struct vrend_sampler_view *view)
  static bool vrend_view_swizzle_shared(const struct vrend_shader_view *views, uint32_t index,
                                        const struct vrend_sampler_view *view)
  {
@@ -280,7 +294,7 @@ index 354eb66..fcce4ba 100644
        return false;
     for (int j = 0; j < views->max_num_views; j++) {
        const struct vrend_sampler_view *other = views->views[j];
-@@ -6282,6 +6340,9 @@ void vrend_clear(struct vrend_context *ctx, unsigned buffers,
+@@ -6282,6 +6351,9 @@ void vrend_clear(struct vrend_context *ctx, unsigned buffers,
        return;
  
     vrend_video_ready_sub(sub_ctx);
@@ -290,7 +304,7 @@ index 354eb66..fcce4ba 100644
     if (ctx->ctx_switch_pending)
        vrend_finish_context_switch(ctx);
  
-@@ -6353,6 +6414,9 @@ int vrend_clear_texture(struct vrend_context* ctx,
+@@ -6353,6 +6425,9 @@ int vrend_clear_texture(struct vrend_context* ctx,
        return EINVAL;
     }
     vrend_video_ready(res);
@@ -300,17 +314,17 @@ index 354eb66..fcce4ba 100644
  
     /* 32-bit BGRA resources are always reordered to RGBA ordering before
      * submission to the host driver. Reorder red/blue color bytes in
-@@ -6414,6 +6478,9 @@ void vrend_clear_surface(struct vrend_context *ctx, uint32_t surf_handle,
-    glEnable(GL_SCISSOR_TEST);
-    ctx->sub->scissor_state_dirty = (1 << 0);
+@@ -6407,6 +6482,9 @@ void vrend_clear_surface(struct vrend_context *ctx, uint32_t surf_handle,
+       return;
+    }
  
 +#ifdef ENABLE_METAL
 +   vrend_scanout_write(ctx, surf->texture);
 +#endif
-    // Do clear on blit framebuffer to avoid messing with main fb
-    glBindFramebuffer(GL_FRAMEBUFFER, ctx->sub->blit_fb_ids[0]);
-    vrend_fb_bind_texture_id(
-@@ -6935,6 +7002,9 @@ static GLuint vrend_draw_bind_samplers_shader(struct vrend_sub_context *sub_ctx,
+    if (render_condition_enabled == false)
+       vrend_pause_render_condition(ctx, true);
+ 
+@@ -6935,6 +7013,9 @@ static GLuint vrend_draw_bind_samplers_shader(struct vrend_sub_context *sub_ctx,
        if (tview && tview->texture &&
            (tview->texture->heap_reader || tview->texture->iosurface_data))
           vrend_resource_heap_refresh(sub_ctx, tview->texture);
@@ -320,7 +334,7 @@ index 354eb66..fcce4ba 100644
     }
  #endif
  
-@@ -6999,17 +7069,22 @@ static GLuint vrend_draw_bind_samplers_shader(struct vrend_sub_context *sub_ctx,
+@@ -6999,17 +7080,22 @@ static GLuint vrend_draw_bind_samplers_shader(struct vrend_sub_context *sub_ctx,
              /* OmacVM: the texture's swizzle as this draw needs it: none where the shader
               * applies the view's (a texture shared by views with different swizzles),
               * else the view's own (another slot may have set the shared one since) */
@@ -347,7 +361,7 @@ index 354eb66..fcce4ba 100644
                 }
              }
  
-@@ -8257,6 +8332,9 @@ int vrend_draw_vbo(struct vrend_context *ctx,
+@@ -8257,6 +8343,9 @@ int vrend_draw_vbo(struct vrend_context *ctx,
        return ENOTRECOVERABLE;
  
     vrend_video_ready_sub(sub_ctx);
@@ -357,7 +371,34 @@ index 354eb66..fcce4ba 100644
     if (info->instance_count && !has_feature(feat_draw_instance))
        return EINVAL;
  
-@@ -11487,6 +11565,430 @@ static void vrend_resource_gbm_init(struct vrend_resource *gr, uint32_t format)
+@@ -10250,7 +10339,7 @@ int vrend_renderer_init(const struct vrend_if_cbs *cbs, uint32_t flags)
+       goto fail;
+    }
+ 
+-   vrend_clicbs->make_current(gl_context);
++   vrend_make_current_fenced(gl_context);
+    gl_ver = epoxy_gl_version();
+ 
+    /* Surface the full GL strings early for debugging/profile confirmation. */
+@@ -10555,7 +10644,7 @@ vrend_renderer_fini(void)
+ 
+ static void vrend_destroy_sub_context(struct vrend_sub_context *sub)
+ {
+-   vrend_clicbs->make_current(sub->gl_context);
++   vrend_make_current_fenced(sub->gl_context);
+ 
+    if (has_feature(feat_images)) {
+       for (int shader_type = PIPE_SHADER_VERTEX;
+@@ -10697,7 +10786,7 @@ void vrend_destroy_context(struct vrend_context *ctx)
+       vrend_state.current_hw_ctx = NULL;
+    }
+ 
+-   vrend_clicbs->make_current(ctx->sub->gl_context);
++   vrend_make_current_fenced(ctx->sub->gl_context);
+    /* reset references on framebuffers */
+    vrend_set_framebuffer_state(ctx, 0, NULL, 0);
+ 
+@@ -11487,6 +11576,440 @@ static void vrend_resource_gbm_init(struct vrend_resource *gr, uint32_t format)
  #endif
  }
  
@@ -385,12 +426,11 @@ index 354eb66..fcce4ba 100644
 + * contexts and QEMU's are different GL contexts.
 + */
 +static pthread_mutex_t vrend_scanout_fence_lock = PTHREAD_MUTEX_INITIALIZER;
-+#define VREND_SCANOUT_DUE 16
-+static struct vrend_resource *vrend_scanout_due[VREND_SCANOUT_DUE];   /* referenced */
-+static unsigned vrend_scanout_ndue;
++static struct vrend_resource **vrend_scanout_due;   /* written, no fence yet (referenced) */
++static unsigned vrend_scanout_ndue, vrend_scanout_due_cap;
 +static unsigned vrend_scanout_count;   /* scanout IOSurfaces alive: the hooks skip when 0 */
 +static struct {
-+   uint64_t writes, moves, queued, made, dropped, waits, unsafe, refreshes, last_log_us;
++   uint64_t writes, moves, queued, made, dropped, uncharged, refreshes, last_log_us;
 +} vrend_scanout_stats;
 +
 +static uint64_t vrend_scanout_now_us(void)
@@ -408,14 +448,14 @@ index 354eb66..fcce4ba 100644
 +      vrend_scanout_stats.last_log_us = now;
 +   if (now - vrend_scanout_stats.last_log_us < 5000000)
 +      return;
-+   if (vrend_scanout_stats.moves || vrend_scanout_stats.waits || vrend_scanout_stats.refreshes)
++   if (vrend_scanout_stats.moves || vrend_scanout_stats.refreshes)
 +      virgl_info("scanout IOSurfaces, last 5 s: %" PRIu64 " writes, %" PRIu64 " moved to another "
 +                 "IOSurface with a copy (%" PRIu64 " of them queued in QEMU, the others held by "
-+                 "WindowServer; %" PRIu64 " made, %" PRIu64 " let go), %" PRIu64
-+                 " waited for one (%" PRIu64 " then written in use), %" PRIu64 " shadow copies\n",
++                 "WindowServer; %" PRIu64 " made, %" PRIu64 " past the GPU memory budget, %" PRIu64
++                 " let go), %" PRIu64 " shadow copies\n",
 +                 vrend_scanout_stats.writes, vrend_scanout_stats.moves, vrend_scanout_stats.queued,
-+                 vrend_scanout_stats.made, vrend_scanout_stats.dropped, vrend_scanout_stats.waits,
-+                 vrend_scanout_stats.unsafe, vrend_scanout_stats.refreshes);
++                 vrend_scanout_stats.made, vrend_scanout_stats.uncharged,
++                 vrend_scanout_stats.dropped, vrend_scanout_stats.refreshes);
 +   memset(&vrend_scanout_stats, 0, sizeof(vrend_scanout_stats));
 +   vrend_scanout_stats.last_log_us = now;
 +}
@@ -516,8 +556,9 @@ index 354eb66..fcce4ba 100644
 +   default:
 +      return false;
 +   }
++   /* not a buffer QEMU made (y_0_top: QEMU shows an IOSurface's first row at the top) */
 +   if (vrend_state.use_gles || !(pr->bind & VIRGL_RES_BIND_SCANOUT) ||
-+       pr->target != PIPE_TEXTURE_2D || pr->last_level != 0 || pr->nr_samples > 1 ||
++       gr->y_0_top || pr->target != PIPE_TEXTURE_2D || pr->last_level != 0 || pr->nr_samples > 1 ||
 +       pr->array_size > 1 || pr->depth0 != 1 || !pr->width0 || !pr->height0 ||
 +       pr->width0 > 16384 || pr->height0 > 16384)
 +      return false;
@@ -570,6 +611,8 @@ index 354eb66..fcce4ba 100644
 +      return;
 +   if (s->shadow)
 +      glDeleteTextures(1, &s->shadow);
++   if (s->shadow_sync)
++      glDeleteSync(s->shadow_sync);
 +   virgl_metal_iosurface_release(s->surface);
 +   for (unsigned k = 0; k < VREND_SCANOUT_SPARES; k++)
 +      virgl_metal_iosurface_release(s->spare[k]);
@@ -580,7 +623,7 @@ index 354eb66..fcce4ba 100644
 +   vrend_scanout_count--;
 +}
 +
-+/* An IOSurface nothing uses for the buffer to move to; NULL when the budget refuses one. */
++/* An IOSurface nothing uses for the buffer to move to; NULL only when none can be made. */
 +static void **vrend_scanout_free_spare(struct vrend_resource *res)
 +{
 +   struct vrend_scanout *s = res->scanout;
@@ -597,18 +640,24 @@ index 354eb66..fcce4ba 100644
 +      k = s->next_drop++ % VREND_SCANOUT_SPARES;
 +      virgl_metal_iosurface_release(s->spare[k]);
 +      s->spare[k] = NULL;
-+      virgl_gpu_budget_uncharge(s->bytes);
-+      s->charged -= s->bytes;
++      if (s->spare_charged & (1u << k)) {
++         virgl_gpu_budget_uncharge(s->bytes);
++         s->charged -= s->bytes;
++      }
 +      vrend_scanout_stats.dropped++;
 +   }
-+   if (virgl_gpu_budget_charge(s->bytes, true))
-+      return NULL;
 +   s->spare[k] = virgl_metal_scanout_iosurface_create(res->base.width0, res->base.height0, s->fourcc);
-+   if (!s->spare[k]) {
-+      virgl_gpu_budget_uncharge(s->bytes);
++   if (!s->spare[k])
 +      return NULL;
++   /* charged as display memory; past the budget it is made all the same (at most three a
++    * buffer), as the guest must not write a buffer on the screen */
++   s->spare_charged &= ~(1u << k);
++   if (!virgl_gpu_budget_charge(s->bytes, true)) {
++      s->spare_charged |= 1u << k;
++      s->charged += s->bytes;
++   } else {
++      vrend_scanout_stats.uncharged++;
 +   }
-+   s->charged += s->bytes;
 +   vrend_scanout_stats.made++;
 +   return &s->spare[k];
 +}
@@ -662,26 +711,21 @@ index 354eb66..fcce4ba 100644
 +   s->gen++;
 +   vrend_scanout_stats.writes++;
 +   if (!s->fence_due) {
-+      if (vrend_scanout_ndue == VREND_SCANOUT_DUE)
-+         vrend_renderer_scanout_fences_make();
++      if (vrend_scanout_ndue == vrend_scanout_due_cap) {
++         vrend_scanout_due_cap = MAX2(8, vrend_scanout_due_cap * 2);
++         vrend_scanout_due = realloc(vrend_scanout_due,
++                                     vrend_scanout_due_cap * sizeof(*vrend_scanout_due));
++      }
 +      s->fence_due = true;
++      vrend_scanout_due[vrend_scanout_ndue] = NULL;
 +      vrend_resource_reference(&vrend_scanout_due[vrend_scanout_ndue++], res);
 +   }
 +   if (__atomic_exchange_n(&s->may_be_shown, 0, __ATOMIC_ACQ_REL) &&
 +       virgl_metal_iosurface_in_use(s->surface)) {
 +      vrend_scanout_stats.queued += virgl_metal_iosurface_used_here(s->surface);
 +      moved = vrend_scanout_move(ctx, res);
-+      if (!moved) {
-+         /* no spare (the budget is spent): wait for it, at most 25 ms */
-+         uint64_t t0 = vrend_scanout_now_us();
-+         bool busy = true;
-+         while (busy && vrend_scanout_now_us() - t0 < VREND_SCANOUT_WAIT_US) {
-+            usleep(100);
-+            busy = virgl_metal_iosurface_in_use(s->surface);
-+         }
-+         vrend_scanout_stats.waits++;
-+         vrend_scanout_stats.unsafe += busy;
-+      }
++      if (!moved)
++         virgl_error("a scanout IOSurface in use could not move: the guest writes it on screen\n");
 +   }
 +   vrend_scanout_stats_tick();
 +   return moved;
@@ -728,9 +772,16 @@ index 354eb66..fcce4ba 100644
 +      vrend_scanout_gpu_wait(s);
 +      vrend_scanout_copy(ctx, res->gl_id, s->shadow, GL_TEXTURE_2D, res->base.width0,
 +                         res->base.height0);
++      if (s->shadow_sync)
++         glDeleteSync(s->shadow_sync);
++      s->shadow_sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
++      glFlush();
 +      s->shadow_gen = s->gen;
 +      vrend_scanout_stats.refreshes++;
 +      vrend_scanout_stats_tick();
++   } else if (ctx && s->shadow_sync) {
++      /* copied in this or another context: wait for that copy */
++      glWaitSync(s->shadow_sync, 0, GL_TIMEOUT_IGNORED);
 +   }
 +   return s->shadow;
 +}
@@ -788,7 +839,7 @@ index 354eb66..fcce4ba 100644
  static int vrend_resource_alloc_texture(struct vrend_resource *gr,
                                          enum virgl_formats format,
                                          void *image_oes)
-@@ -11513,6 +12015,11 @@ static int vrend_resource_alloc_texture(struct vrend_resource *gr,
+@@ -11513,6 +12036,11 @@ static int vrend_resource_alloc_texture(struct vrend_resource *gr,
        image_oes = gr->egl_image;
     }
  
@@ -800,7 +851,7 @@ index 354eb66..fcce4ba 100644
     gr->target = tgsitargettogltarget(pr->target, pr->nr_samples);
     gr->storage_bits |= VREND_STORAGE_GL_TEXTURE;
  
-@@ -11689,6 +12196,9 @@ static int vrend_resource_alloc_texture(struct vrend_resource *gr,
+@@ -11689,6 +12217,9 @@ static int vrend_resource_alloc_texture(struct vrend_resource *gr,
  #endif
     }
  
@@ -810,7 +861,7 @@ index 354eb66..fcce4ba 100644
     gt->state.max_lod = -1;
     gt->cur_swizzle[0] = gt->cur_swizzle[1] = gt->cur_swizzle[2] = gt->cur_swizzle[3] = -1;
     gt->cur_base = -1;
-@@ -12770,6 +13280,7 @@ void vrend_renderer_resource_destroy(struct vrend_resource *res)
+@@ -12770,6 +13301,7 @@ void vrend_renderer_resource_destroy(struct vrend_resource *res)
     if (res->iosurface_rect)
        glDeleteTextures(1, &res->iosurface_rect);
     virgl_metal_iosurface_release(res->iosurface);
@@ -818,18 +869,18 @@ index 354eb66..fcce4ba 100644
  #endif
     free(res);
  }
-@@ -13946,6 +14457,10 @@ static int vrend_renderer_transfer_internal(struct vrend_context *ctx,
-    if (!vrend_hw_switch_context(ctx, true))
-       return EINVAL;
-    vrend_video_ready(res);
-+#ifdef ENABLE_METAL
-+   if (transfer_mode == VIRGL_TRANSFER_TO_HOST)
-+      vrend_scanout_write(ctx, res);
-+#endif
+@@ -13176,6 +13708,10 @@ static int vrend_renderer_transfer_write_iov(struct vrend_context *ctx,
+ {
+    void *data;
  
-    assert(check_transfer_iovec(res, info));
-    if (info->iovec && info->iovec_cnt) {
-@@ -14189,6 +14704,9 @@ int vrend_renderer_copy_transfer3d(struct vrend_context *ctx,
++#ifdef ENABLE_METAL
++   vrend_scanout_write(ctx, res);
++#endif
++
+    vrend_resource_contents_changed(res);
+    if ((is_only_bit(res->storage_bits, VREND_STORAGE_GUEST_MEMORY) ||
+        has_bit(res->storage_bits, VREND_STORAGE_HOST_SYSTEM_MEMORY)) && res->iov) {
+@@ -14189,6 +14725,9 @@ int vrend_renderer_copy_transfer3d(struct vrend_context *ctx,
  {
     static int copy_log_budget = 8;
     vrend_video_ready(dst_res);
@@ -839,7 +890,7 @@ index 354eb66..fcce4ba 100644
     if (copy_log_budget > 0) {
        virgl_warn("copy_transfer3d: dst target=%u base.target=%u samples=%u format=%s level=%u box=[%d,%d,%d %dx%dx%d]\n",
                   dst_res->target, dst_res->base.target, dst_res->base.nr_samples,
-@@ -14780,6 +15298,9 @@ void vrend_renderer_resource_copy_region(struct vrend_context *ctx,
+@@ -14780,6 +15319,9 @@ void vrend_renderer_resource_copy_region(struct vrend_context *ctx,
     }
     vrend_video_ready(src_res);
     vrend_video_ready(dst_res);
@@ -849,23 +900,29 @@ index 354eb66..fcce4ba 100644
  
     if (!resource_contains_box(src_res, src_box, src_level)) {
        vrend_report_context_error(ctx, VIRGL_ERROR_CTX_ILLEGAL_CMD_BUFFER, src_handle);
-@@ -15305,12 +15826,31 @@ static void vrend_renderer_blit_int(struct vrend_context *ctx,
+@@ -15305,12 +15847,37 @@ static void vrend_renderer_blit_int(struct vrend_context *ctx,
        blit_info.has_texture_srgb_decode = has_feature(feat_srgb_write_control);
  
        VREND_DEBUG(dbg_blit, ctx, "BLIT_INT: use GL fallback\n");
 +#ifdef ENABLE_METAL
 +      /* the shader blitter samples a 2D texture: a scanout IOSurface's shadow */
 +      GLenum src_target = src_res->target;
++      GLint swizzle[4];
 +      if (src_res->scanout) {
 +         blit_info.src_view = vrend_scanout_shadow(ctx, src_res);
 +         src_res->target = GL_TEXTURE_2D;
++         glBindTexture(GL_TEXTURE_2D, blit_info.src_view);
++         glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
 +      }
 +#endif
        vrend_renderer_blit_gl(ctx, src_res, dst_res, &blit_info);
 +#ifdef ENABLE_METAL
 +      if (src_res->scanout) {
++         /* the blitter set the shadow's swizzle: the one the guest's draws set, back */
 +         src_res->target = src_target;
-+         src_res->scanout->shadow_swizzle[0] = -1;   /* the blitter set its own */
++         glBindTexture(GL_TEXTURE_2D, blit_info.src_view);
++         glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
++         glBindTexture(GL_TEXTURE_2D, 0);
 +      }
 +#endif
        vrend_sync_make_current(ctx->sub->gl_context);
@@ -881,7 +938,7 @@ index 354eb66..fcce4ba 100644
        glDeleteTextures(1, &blit_info.src_view);
  
     if (blit_info.dst_view != dst_res->gl_id)
-@@ -15337,6 +15877,9 @@ void vrend_renderer_blit(struct vrend_context *ctx,
+@@ -15337,6 +15904,9 @@ void vrend_renderer_blit(struct vrend_context *ctx,
     }
     vrend_video_ready(src_res);
     vrend_video_ready(dst_res);
@@ -891,7 +948,53 @@ index 354eb66..fcce4ba 100644
  
     if (ctx->in_error)
        return;
-@@ -17877,6 +18420,13 @@ void vrend_renderer_borrow_texture_for_scanout(struct pipe_resource *pres)
+@@ -15807,7 +16377,7 @@ static void vrend_finish_context_switch(struct vrend_context *ctx)
+ 
+    vrend_state.current_hw_ctx = ctx;
+ 
+-   vrend_clicbs->make_current(ctx->sub->gl_context);
++   vrend_make_current_fenced(ctx->sub->gl_context);
+ }
+ 
+ void
+@@ -17387,7 +17957,8 @@ void *vrend_renderer_get_cursor_contents(struct pipe_resource *pres,
+    if (res->base.width0 > 128 || res->base.height0 > 128)
+       return NULL;
+ 
+-   if (res->target != GL_TEXTURE_2D)
++   /* OmacVM: a scanout IOSurface (a cursor buffer may be one) is a RECTANGLE texture */
++   if (res->target != GL_TEXTURE_2D && res->target != GL_TEXTURE_RECTANGLE)
+       return NULL;
+ 
+    if (!width || !height)
+@@ -17695,7 +18266,7 @@ void vrend_renderer_create_sub_ctx(struct vrend_context *ctx, int sub_ctx_id)
+ 
+    sub->gl_context = vrend_clicbs->create_gl_context(0, &ctx_params);
+    sub->parent = ctx;
+-   vrend_clicbs->make_current(sub->gl_context);
++   vrend_make_current_fenced(sub->gl_context);
+ 
+    /* enable if vrend_renderer_init function has done it as well */
+    if (has_feature(feat_debug_cb)) {
+@@ -17770,7 +18341,7 @@ void vrend_renderer_destroy_sub_ctx(struct vrend_context *ctx, int sub_ctx_id)
+             ctx->sub = ctx->sub0;
+          }
+          vrend_destroy_sub_context(sub);
+-         vrend_clicbs->make_current(ctx->sub->gl_context);
++         vrend_make_current_fenced(ctx->sub->gl_context);
+          break;
+       }
+    }
+@@ -17781,7 +18352,7 @@ void vrend_renderer_set_sub_ctx(struct vrend_context *ctx, int sub_ctx_id)
+    struct vrend_sub_context *sub = vrend_renderer_find_sub_ctx(ctx, sub_ctx_id);
+    if (sub && ctx->sub != sub) {
+       ctx->sub = sub;
+-      vrend_clicbs->make_current(sub->gl_context);
++      vrend_make_current_fenced(sub->gl_context);
+    }
+ }
+ 
+@@ -17877,6 +18448,13 @@ void vrend_renderer_borrow_texture_for_scanout(struct pipe_resource *pres)
     struct vrend_texture *tex = (struct vrend_texture *)pres;
     struct vrend_format_table *tex_conv = &tex_conv_table[tex->base.base.format];
  
