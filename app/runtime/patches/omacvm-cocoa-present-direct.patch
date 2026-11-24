@@ -93,10 +93,10 @@ index 6919ece..bf61982 100644
  
  typedef struct ScanoutTexture {
 diff --git a/ui/cocoa.m b/ui/cocoa.m
-index e4e6fbd..845e5f4 100644
+index e4e6fbd..b840d8a 100644
 --- a/ui/cocoa.m
 +++ b/ui/cocoa.m
-@@ -314,6 +314,12 @@ static void cocoa_gl_render(void);
+@@ -314,6 +314,13 @@ static void cocoa_gl_render(void);
  static void omacvm_splash_view_size(uint32_t w, uint32_t h);
  static void present_tiles_hide(void);
  static void present_tiles_whole_shown(CALayer *layer, IOSurfaceRef surf);
@@ -105,11 +105,20 @@ index e4e6fbd..845e5f4 100644
 +                             int gain_c, bool pq);
 +static void omacvm_iosurface_wait(const DisplayGLTexture *texture, uint32_t id, bool gpu);
 +static void omacvm_iosurface_layer_draw(const DisplayGLTexture *texture, GLint filter);
++static void omacvm_present_resend(void);
 +static void surface_put(IOSurfaceRef surf);
  /* GL frames are shown as IOSurfaces (the view's layer is a plain CALayer). */
  static bool cocoa_gl_present_on(void);
  
-@@ -7733,7 +7739,8 @@ static void omacvm_splash_update(void)
+@@ -1904,6 +1911,7 @@ static bool omacvm_present_layer(void)
+      */
+     if (omacvm_present_layer()) {
+         with_bql(^{
++            omacvm_present_resend();
+             gl_dirty = true;
+             cocoa_refresh_activity();
+         });
+@@ -7733,7 +7741,8 @@ static void omacvm_splash_update(void)
   * from the bottom) into px as 0xAARRGGBB. False if it cannot be read (said
   * once; the logo then waits for the display agent or the time limit).
   */
@@ -119,7 +128,7 @@ index e4e6fbd..845e5f4 100644
  {
      static GLuint fb;
      static bool said;
-@@ -7746,7 +7753,7 @@ static bool omacvm_splash_read(GLuint tex, int x, int y, int w, int h, uint32_t
+@@ -7746,7 +7755,7 @@ static bool omacvm_splash_read(GLuint tex, int x, int y, int w, int h, uint32_t
          /* not ours */
      }
      glBindFramebuffer(GL_READ_FRAMEBUFFER, fb);
@@ -128,7 +137,7 @@ index e4e6fbd..845e5f4 100644
      status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
      if (status == GL_FRAMEBUFFER_COMPLETE) {
          glPixelStorei(GL_PACK_ALIGNMENT, 4);
-@@ -7754,7 +7761,7 @@ static bool omacvm_splash_read(GLuint tex, int x, int y, int w, int h, uint32_t
+@@ -7754,7 +7763,7 @@ static bool omacvm_splash_read(GLuint tex, int x, int y, int w, int h, uint32_t
          glReadPixels(x, y, w, h, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, px);
      }
      err = glGetError();
@@ -137,7 +146,7 @@ index e4e6fbd..845e5f4 100644
      glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
      if (status != GL_FRAMEBUFFER_COMPLETE || err != GL_NO_ERROR) {
          if (!said) {
-@@ -7790,9 +7797,12 @@ static bool omacvm_splash_sees_desktop(void)
+@@ -7790,9 +7799,12 @@ static bool omacvm_splash_sees_desktop(void)
              return false;
          }
          with_gl_view_ctx(^{
@@ -151,7 +160,7 @@ index e4e6fbd..845e5f4 100644
                                          gl_scanout_w, 1, line);
                  for (int c = 0; ok && c < SPLASH_PROBE_COLS; c++) {
                      px[r * SPLASH_PROBE_COLS + c] =
-@@ -8578,31 +8588,37 @@ static void cocoa_gl_render(void)
+@@ -8578,31 +8590,37 @@ static void cocoa_gl_render(void)
              cocoa_gl_log("before bind borrow fb=%d fb_status=0x%x tex=%u", fb, fbs, texture.id);
          }
  
@@ -211,7 +220,7 @@ index e4e6fbd..845e5f4 100644
          if (cocoa_gl_trace_enabled()) {
              GLenum blit_err = glGetError();
              GLint fb = 0;
-@@ -9735,7 +9751,7 @@ static CGColorSpaceRef cocoa_gl_present_colorspace(bool deep, bool linear)
+@@ -9735,7 +9753,7 @@ static CGColorSpaceRef cocoa_gl_present_colorspace(bool deep, bool linear)
  static void cocoa_gl_layer_follow(CALayer *layer, IOSurfaceRef surf, bool linear)
  {
      OSType fmt = IOSurfaceGetPixelFormat(surf);
@@ -220,7 +229,7 @@ index e4e6fbd..845e5f4 100644
                 present_color == 1 && (cocoa_gl_present_hdr_wanted() || linear);
      if ([layer wantsExtendedDynamicRangeContent] != hdr) {
          [layer setWantsExtendedDynamicRangeContent:hdr];
-@@ -10219,6 +10235,492 @@ static int cocoa_gl_present_tiles(GLuint src, bool flip)
+@@ -10219,6 +10237,510 @@ static int cocoa_gl_present_tiles(GLuint src, bool flip)
      return nt;
  }
  
@@ -244,6 +253,12 @@ index e4e6fbd..845e5f4 100644
 +static int present_direct_last_how;
 +static uint64_t present_direct_n[PD_N];
 +static int64_t present_direct_log_ns;
++
++/* QEMU thread: the next flush of the guest's IOSurface sends it again (its layout changed). */
++static void omacvm_present_resend(void)
++{
++    present_direct_last = NULL;
++}
 +
 +static void present_direct_count(int why)
 +{
@@ -441,13 +456,24 @@ index e4e6fbd..845e5f4 100644
 +    static CGLContextObj wait_ctx;
 +    IOSurfaceRef surf = texture->iosurface;
 +
-+    if (!queue) {
++    if (!queue && !wait_ctx) {
 +        CGLPixelFormatObj pf = cocoa_gl_create_cgl_pixel_format(32);
-+        CGLCreateContext(pf, gl_view_ctx, &wait_ctx);
++        if (CGLCreateContext(pf, gl_view_ctx, &wait_ctx) != kCGLNoError) {
++            wait_ctx = NULL;
++        }
 +        CGLDestroyPixelFormat(pf);
-+        queue = dispatch_queue_create("org.omacvm.iosurface-reads",
-+            dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,
-+                                                    QOS_CLASS_USER_INTERACTIVE, 0));
++        if (wait_ctx) {
++            queue = dispatch_queue_create("org.omacvm.iosurface-reads",
++                dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,
++                                                        QOS_CLASS_USER_INTERACTIVE, 0));
++        }
++    }
++    if (!queue) {
++        /* no context to wait in: the draw is done before the IOSurface is let go */
++        omacvm_rect_draw(texture->id, texture->width, texture->height, texture->y_0_top,
++                         filter, 0, false);
++        glFinish();
++        return;
 +    }
 +    CFRetain(surf);
 +    IOSurfaceIncrementUseCount(surf);
@@ -545,7 +571,7 @@ index e4e6fbd..845e5f4 100644
 +
 +static void present_pace_check(IOSurfaceRef s)
 +{
-+    uint64_t hash;
++    uint64_t hash = 0;
 +    int top, bottom, mark;
 +
 +    if (present_pace_on < 0) {
@@ -570,7 +596,8 @@ index e4e6fbd..845e5f4 100644
 +            present_pace.overwritten++;
 +        }
 +    }
-+    if (!present_pace_read(s, &hash, &top, &bottom, &mark)) {
++    bool read = present_pace_read(s, &hash, &top, &bottom, &mark);
++    if (!read) {
 +        present_pace.unread++;
 +    } else if (top >= 0) {
 +        if (bottom >= 0 && bottom != top) {
@@ -589,7 +616,7 @@ index e4e6fbd..845e5f4 100644
 +    if (present_pace.prev) {
 +        CFRelease(present_pace.prev);
 +    }
-+    present_pace.prev = (IOSurfaceRef)CFRetain(s);
++    present_pace.prev = read ? (IOSurfaceRef)CFRetain(s) : NULL;
 +    present_pace.prev_hash = hash;
 +    if (!present_pace.log_ns) {
 +        present_pace.log_ns = now;
@@ -713,7 +740,7 @@ index e4e6fbd..845e5f4 100644
  /* QEMU thread, BQL held. Returns false when nothing could be shown. */
  static bool cocoa_gl_present(void)
  {
-@@ -10254,8 +10756,11 @@ static bool cocoa_gl_present(void)
+@@ -10254,8 +10776,11 @@ static bool cocoa_gl_present(void)
          return true;
      }
  
@@ -726,7 +753,7 @@ index e4e6fbd..845e5f4 100644
          if (!texture.id) {
              return false;
          }
-@@ -10264,6 +10769,7 @@ static bool cocoa_gl_present(void)
+@@ -10264,6 +10789,7 @@ static bool cocoa_gl_present(void)
          h = texture.height;
          /* The surface's first row is the top of the window. */
          flip = !texture.y_0_top;
@@ -734,7 +761,7 @@ index e4e6fbd..845e5f4 100644
      } else if (omacvm_splash_wanted(NULL, surface)) {
          /* No picture of the guest's: the boot logo (or black), view-sized. */
          splash = true;
-@@ -10289,7 +10795,9 @@ static bool cocoa_gl_present(void)
+@@ -10289,7 +10815,9 @@ static bool cocoa_gl_present(void)
  
      /* A 10-bit scanout keeps its depth: half-float surfaces. */
      GLint ifmt = 0;
@@ -745,7 +772,7 @@ index e4e6fbd..845e5f4 100644
          glBindTexture(GL_TEXTURE_2D, src);
          glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &ifmt);
          glBindTexture(GL_TEXTURE_2D, 0);
-@@ -10319,6 +10827,31 @@ static bool cocoa_gl_present(void)
+@@ -10319,6 +10847,33 @@ static bool cocoa_gl_present(void)
                      pq ? ", HDR (PQ)" : linear ? ", extra brightness" : "");
          deep_logged = deep + 2 * linear;
      }
@@ -755,11 +782,13 @@ index e4e6fbd..845e5f4 100644
 +        bool gpq = gdeep && cocoa_gl_present_hdr_wanted();
 +        int how = gpq | (filter == GL_LINEAR) << 1;
 +        /*
-+         * Sent to the layer as it is last, the same way: it is on the layer or on its way,
-+         * and nothing was written since (a write into a buffer in use moves it).
++         * Sent to the layer as it is last, the same way, and still in the queue (QEMU's
++         * use count) or on the layer: nothing was written since (a write into a buffer in
++         * use moves it). A frame the queue dropped is sent again.
 +         */
-+        int why = linear ? PD_BRIGHT :
-+                  gsurf == present_direct_last && how == present_direct_last_how ?
++        int why = linear && omacvm_rect_programs() ? PD_BRIGHT :
++                  gsurf == present_direct_last && how == present_direct_last_how &&
++                  (gsurf == qatomic_read(&present_shown) || IOSurfaceGetUseCount(gsurf)) ?
 +                      PD_SAME : PD_DIRECT;
 +        present_direct_count(why);
 +        if (why == PD_SAME) {
@@ -777,7 +806,7 @@ index e4e6fbd..845e5f4 100644
      if (!cocoa_gl_present_alloc(w, h, deep, linear)) {
          if (!(deep || linear) || !cocoa_gl_present_alloc(w, h, false, false)) {
              CGLSetCurrentContext(prev);
-@@ -10441,7 +10974,7 @@ static bool cocoa_gl_present(void)
+@@ -10441,7 +10996,7 @@ static bool cocoa_gl_present(void)
       * OmacVM: the tiled present (present_tiles_on). Before surface n is
       * taken: a frame in tiles leaves it untouched for the next whole frame.
       */
@@ -786,7 +815,7 @@ index e4e6fbd..845e5f4 100644
          !present_pd_unflushed && !splash && !boost && gl_scanout_borrow &&
          w == present_w && h == present_h &&
          gl_scanout_x == 0 && gl_scanout_y == 0 &&
-@@ -10502,6 +11035,8 @@ static bool cocoa_gl_present(void)
+@@ -10502,6 +11057,8 @@ static bool cocoa_gl_present(void)
                      pd.w, pd.h, w, h);
      }
  
@@ -795,7 +824,7 @@ index e4e6fbd..845e5f4 100644
      glBindFramebuffer(GL_FRAMEBUFFER, present_fbo);
      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                             GL_TEXTURE_RECTANGLE, present_tex[n], 0);
-@@ -10534,7 +11069,24 @@ static bool cocoa_gl_present(void)
+@@ -10534,7 +11091,24 @@ static bool cocoa_gl_present(void)
                                                                 : GL_LINEAR;
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, blit_filter);
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, blit_filter);
@@ -821,7 +850,7 @@ index e4e6fbd..845e5f4 100644
              qemu_gl_run_texture_blit(present_gls, flip);
          }
          if (!gl_scanout_borrow && omacvm_console_check_on()) {
-@@ -10543,79 +11095,32 @@ static bool cocoa_gl_present(void)
+@@ -10543,79 +11117,32 @@ static bool cocoa_gl_present(void)
      }
      glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
      glDisable(GL_SCISSOR_TEST);
@@ -912,7 +941,7 @@ index e4e6fbd..845e5f4 100644
      return true;
  }
  
-@@ -10954,6 +11459,7 @@ static void present_frame_show(PresentFrame *f)
+@@ -10954,6 +11481,7 @@ static void present_frame_show(PresentFrame *f)
          cocoa_gl_present_show_tiles(f);
      } else if (f->surf) {
          cocoa_gl_present_show(f->surf, f->filter, f->flushed, f->linear);
@@ -920,7 +949,7 @@ index e4e6fbd..845e5f4 100644
      }
  }
  
-@@ -12594,10 +13100,16 @@ static void omacvm_head_render(OmacVMHead *hd, NSSize size)
+@@ -12594,10 +13122,16 @@ static void omacvm_head_render(OmacVMHead *hd, NSSize size)
      if (hd->borrow) {
          DisplayGLTexture texture = hd->borrow(hd->scanout_id);
  

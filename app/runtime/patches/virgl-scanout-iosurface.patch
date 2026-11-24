@@ -170,7 +170,7 @@ index f2f7b2f..5670491 100644
  {
     IOSurfaceRef surface = (IOSurfaceRef)iosurface;
 diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
-index 354eb66..d7a9659 100644
+index 354eb66..5cca1ae 100644
 --- a/src/vrend/vrend_renderer.c
 +++ b/src/vrend/vrend_renderer.c
 @@ -166,6 +166,53 @@ static struct { uint64_t woken, late, timed_out, stray; } fence_busy_stats;
@@ -398,7 +398,7 @@ index 354eb66..d7a9659 100644
     /* reset references on framebuffers */
     vrend_set_framebuffer_state(ctx, 0, NULL, 0);
  
-@@ -11487,6 +11576,440 @@ static void vrend_resource_gbm_init(struct vrend_resource *gr, uint32_t format)
+@@ -11487,6 +11576,449 @@ static void vrend_resource_gbm_init(struct vrend_resource *gr, uint32_t format)
  #endif
  }
  
@@ -712,13 +712,22 @@ index 354eb66..d7a9659 100644
 +   vrend_scanout_stats.writes++;
 +   if (!s->fence_due) {
 +      if (vrend_scanout_ndue == vrend_scanout_due_cap) {
-+         vrend_scanout_due_cap = MAX2(8, vrend_scanout_due_cap * 2);
-+         vrend_scanout_due = realloc(vrend_scanout_due,
-+                                     vrend_scanout_due_cap * sizeof(*vrend_scanout_due));
++         unsigned cap = MAX2(8, vrend_scanout_due_cap * 2);
++         struct vrend_resource **due = realloc(vrend_scanout_due, cap * sizeof(*due));
++         if (!due) {
++            /* no room: the writes so far get their fence now, this one with the next */
++            vrend_renderer_scanout_fences_make();
++            due = vrend_scanout_due;
++         } else {
++            vrend_scanout_due = due;
++            vrend_scanout_due_cap = cap;
++         }
 +      }
-+      s->fence_due = true;
-+      vrend_scanout_due[vrend_scanout_ndue] = NULL;
-+      vrend_resource_reference(&vrend_scanout_due[vrend_scanout_ndue++], res);
++      if (vrend_scanout_ndue < vrend_scanout_due_cap) {
++         s->fence_due = true;
++         vrend_scanout_due[vrend_scanout_ndue] = NULL;
++         vrend_resource_reference(&vrend_scanout_due[vrend_scanout_ndue++], res);
++      }
 +   }
 +   if (__atomic_exchange_n(&s->may_be_shown, 0, __ATOMIC_ACQ_REL) &&
 +       virgl_metal_iosurface_in_use(s->surface)) {
@@ -839,7 +848,7 @@ index 354eb66..d7a9659 100644
  static int vrend_resource_alloc_texture(struct vrend_resource *gr,
                                          enum virgl_formats format,
                                          void *image_oes)
-@@ -11513,6 +12036,11 @@ static int vrend_resource_alloc_texture(struct vrend_resource *gr,
+@@ -11513,6 +12045,11 @@ static int vrend_resource_alloc_texture(struct vrend_resource *gr,
        image_oes = gr->egl_image;
     }
  
@@ -851,7 +860,7 @@ index 354eb66..d7a9659 100644
     gr->target = tgsitargettogltarget(pr->target, pr->nr_samples);
     gr->storage_bits |= VREND_STORAGE_GL_TEXTURE;
  
-@@ -11689,6 +12217,9 @@ static int vrend_resource_alloc_texture(struct vrend_resource *gr,
+@@ -11689,6 +12226,9 @@ static int vrend_resource_alloc_texture(struct vrend_resource *gr,
  #endif
     }
  
@@ -861,7 +870,7 @@ index 354eb66..d7a9659 100644
     gt->state.max_lod = -1;
     gt->cur_swizzle[0] = gt->cur_swizzle[1] = gt->cur_swizzle[2] = gt->cur_swizzle[3] = -1;
     gt->cur_base = -1;
-@@ -12770,6 +13301,7 @@ void vrend_renderer_resource_destroy(struct vrend_resource *res)
+@@ -12770,6 +13310,7 @@ void vrend_renderer_resource_destroy(struct vrend_resource *res)
     if (res->iosurface_rect)
        glDeleteTextures(1, &res->iosurface_rect);
     virgl_metal_iosurface_release(res->iosurface);
@@ -869,7 +878,7 @@ index 354eb66..d7a9659 100644
  #endif
     free(res);
  }
-@@ -13176,6 +13708,10 @@ static int vrend_renderer_transfer_write_iov(struct vrend_context *ctx,
+@@ -13176,6 +13717,10 @@ static int vrend_renderer_transfer_write_iov(struct vrend_context *ctx,
  {
     void *data;
  
@@ -880,17 +889,7 @@ index 354eb66..d7a9659 100644
     vrend_resource_contents_changed(res);
     if ((is_only_bit(res->storage_bits, VREND_STORAGE_GUEST_MEMORY) ||
         has_bit(res->storage_bits, VREND_STORAGE_HOST_SYSTEM_MEMORY)) && res->iov) {
-@@ -14189,6 +14725,9 @@ int vrend_renderer_copy_transfer3d(struct vrend_context *ctx,
- {
-    static int copy_log_budget = 8;
-    vrend_video_ready(dst_res);
-+#ifdef ENABLE_METAL
-+   vrend_scanout_write(ctx, dst_res);
-+#endif
-    if (copy_log_budget > 0) {
-       virgl_warn("copy_transfer3d: dst target=%u base.target=%u samples=%u format=%s level=%u box=[%d,%d,%d %dx%dx%d]\n",
-                  dst_res->target, dst_res->base.target, dst_res->base.nr_samples,
-@@ -14780,6 +15319,9 @@ void vrend_renderer_resource_copy_region(struct vrend_context *ctx,
+@@ -14780,6 +15325,9 @@ void vrend_renderer_resource_copy_region(struct vrend_context *ctx,
     }
     vrend_video_ready(src_res);
     vrend_video_ready(dst_res);
@@ -900,7 +899,7 @@ index 354eb66..d7a9659 100644
  
     if (!resource_contains_box(src_res, src_box, src_level)) {
        vrend_report_context_error(ctx, VIRGL_ERROR_CTX_ILLEGAL_CMD_BUFFER, src_handle);
-@@ -15305,12 +15847,37 @@ static void vrend_renderer_blit_int(struct vrend_context *ctx,
+@@ -15305,12 +15853,37 @@ static void vrend_renderer_blit_int(struct vrend_context *ctx,
        blit_info.has_texture_srgb_decode = has_feature(feat_srgb_write_control);
  
        VREND_DEBUG(dbg_blit, ctx, "BLIT_INT: use GL fallback\n");
@@ -938,7 +937,7 @@ index 354eb66..d7a9659 100644
        glDeleteTextures(1, &blit_info.src_view);
  
     if (blit_info.dst_view != dst_res->gl_id)
-@@ -15337,6 +15904,9 @@ void vrend_renderer_blit(struct vrend_context *ctx,
+@@ -15337,6 +15910,9 @@ void vrend_renderer_blit(struct vrend_context *ctx,
     }
     vrend_video_ready(src_res);
     vrend_video_ready(dst_res);
@@ -948,7 +947,7 @@ index 354eb66..d7a9659 100644
  
     if (ctx->in_error)
        return;
-@@ -15807,7 +16377,7 @@ static void vrend_finish_context_switch(struct vrend_context *ctx)
+@@ -15807,7 +16383,7 @@ static void vrend_finish_context_switch(struct vrend_context *ctx)
  
     vrend_state.current_hw_ctx = ctx;
  
@@ -957,17 +956,23 @@ index 354eb66..d7a9659 100644
  }
  
  void
-@@ -17387,7 +17957,8 @@ void *vrend_renderer_get_cursor_contents(struct pipe_resource *pres,
+@@ -17387,8 +17963,14 @@ void *vrend_renderer_get_cursor_contents(struct pipe_resource *pres,
     if (res->base.width0 > 128 || res->base.height0 > 128)
        return NULL;
  
 -   if (res->target != GL_TEXTURE_2D)
-+   /* OmacVM: a scanout IOSurface (a cursor buffer may be one) is a RECTANGLE texture */
++   /* OmacVM: a scanout IOSurface (a cursor buffer may be one) is a RECTANGLE texture,
++    * read after the guest's writes into it */
 +   if (res->target != GL_TEXTURE_2D && res->target != GL_TEXTURE_RECTANGLE)
        return NULL;
++#ifdef ENABLE_METAL
++   if (res->scanout)
++      vrend_scanout_gpu_wait(res->scanout);
++#endif
  
     if (!width || !height)
-@@ -17695,7 +18266,7 @@ void vrend_renderer_create_sub_ctx(struct vrend_context *ctx, int sub_ctx_id)
+       return NULL;
+@@ -17695,7 +18277,7 @@ void vrend_renderer_create_sub_ctx(struct vrend_context *ctx, int sub_ctx_id)
  
     sub->gl_context = vrend_clicbs->create_gl_context(0, &ctx_params);
     sub->parent = ctx;
@@ -976,7 +981,7 @@ index 354eb66..d7a9659 100644
  
     /* enable if vrend_renderer_init function has done it as well */
     if (has_feature(feat_debug_cb)) {
-@@ -17770,7 +18341,7 @@ void vrend_renderer_destroy_sub_ctx(struct vrend_context *ctx, int sub_ctx_id)
+@@ -17770,7 +18352,7 @@ void vrend_renderer_destroy_sub_ctx(struct vrend_context *ctx, int sub_ctx_id)
              ctx->sub = ctx->sub0;
           }
           vrend_destroy_sub_context(sub);
@@ -985,7 +990,7 @@ index 354eb66..d7a9659 100644
           break;
        }
     }
-@@ -17781,7 +18352,7 @@ void vrend_renderer_set_sub_ctx(struct vrend_context *ctx, int sub_ctx_id)
+@@ -17781,7 +18363,7 @@ void vrend_renderer_set_sub_ctx(struct vrend_context *ctx, int sub_ctx_id)
     struct vrend_sub_context *sub = vrend_renderer_find_sub_ctx(ctx, sub_ctx_id);
     if (sub && ctx->sub != sub) {
        ctx->sub = sub;
@@ -994,7 +999,7 @@ index 354eb66..d7a9659 100644
     }
  }
  
-@@ -17877,6 +18448,13 @@ void vrend_renderer_borrow_texture_for_scanout(struct pipe_resource *pres)
+@@ -17877,6 +18459,13 @@ void vrend_renderer_borrow_texture_for_scanout(struct pipe_resource *pres)
     struct vrend_texture *tex = (struct vrend_texture *)pres;
     struct vrend_format_table *tex_conv = &tex_conv_table[tex->base.base.format];
  
