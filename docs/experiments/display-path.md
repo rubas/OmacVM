@@ -247,56 +247,52 @@ the flip's completion until the IOSurface is no longer in use. Size L, risk high
 Gain: the present's draw, +0.19 W at 60 and +0.47 W at 120 frames a second on the Air (table above); partial
 present (and the tiled present on WindowServer's side) takes most of that already while little changes.
 
-### Scanout zero copy: prototype (2026-11-24)
+### Scanout zero copy: the direct present (2026-11-24)
 
-Branch `present-direct-surface`: `virgl-scanout-iosurface.patch` makes the guest's 8-bit scanout buffers
-IOSurfaces (bound as RECTANGLE textures; samplers read a 2D shadow), `omacvm-cocoa-present-direct.patch`
-puts the flipped buffer on the layer as it is. Both are off unless `OMACVM_SCANOUT_IOSURFACE=1` and
-`OMACVM_GL_PRESENT_DIRECT=1`. Apple's GL binds an IOSurface only as `GL_TEXTURE_RECTANGLE`
-(`CGLTexImageIOSurface2D` with `GL_TEXTURE_2D` returns `kCGLBadValue` on the M4 Pro), hence the shadow.
+Since `virgl-scanout-iosurface.patch` and `omacvm-cocoa-present-direct.patch`, the guest's 8-bit and
+10-bit scanout buffers are IOSurfaces, and QEMU puts the buffer the guest flipped to on the window as it
+is: the present's draw is gone (its 0.60 ms a frame at 5120x2880 on the M4 Pro). Apple's GL binds an
+IOSurface only as `GL_TEXTURE_RECTANGLE` (`CGLTexImageIOSurface2D` with `GL_TEXTURE_2D` returns
+`kCGLBadValue`), so guest samplers read a 2D shadow copy, made only when a draw samples a scanout
+(screenshots, screen sharing). 10-bit buffers are `'l10r'` IOSurfaces (a probe rendered and read back
+exact 10-bit values); with HDR on they are tagged PQ and the layer shows them with EDR.
 
-The flip hold cannot live in QEMU's flush answer: Hyprland's flushes carry no fence (only `SUBMIT_3D` does),
-and the guest's page flip completes on its own vblank. So virgl checks each write into a scanout buffer:
-WindowServer keeps the frame shown before the current one in use, and with Hyprland's three buffers and
-the vsync queue a buffer is often still in use when Hyprland draws into it again. A plain wait (up to
-25 ms) stalled every third frame and halved the frame rate: the held buffer is released only by a newer
-frame, which the wait keeps from coming. The prototype instead moves a busy buffer to a free spare
-IOSurface (at most two per buffer) and copies its picture there on the GPU; that copy ran for 0 to 30
-frames a second, nothing waited.
+The guest's page flip completes on its own vblank without waiting for the Mac, so a buffer can still be
+queued in QEMU, on the window, or held by WindowServer (which keeps the frame shown before the current
+one) when Hyprland draws into it again. virgl checks every write into a scanout buffer; the first write
+after QEMU took it for the screen moves a busy buffer to a spare IOSurface with a GPU copy. A plain wait
+instead stalled every third frame and halved the frame rate. Most moves came from QEMU queueing a buffer
+the guest flushed twice; QEMU now sends a buffer once, and moves are rare (0 to 68 per 20 s, against
+2400 frames).
 
-Mac mini M4 Pro, test VM full screen at 5120x2880 and 120 Hz on a background session's display (Screen
-Sharing's virtual display, not a panel), a canvas that changes the whole frame 120 times a second
-(`tests/graphics/pacing/pacing.html` with a second counter strip at the bottom), a fresh VM per arm,
-A B B A, 3 rounds, 20 s each; another VM on the Mac drew 85-115 ms/s of GPU throughout. The latency rows
-ran both arms on the prototype's runtime with `OMACVM_GL_LOSSLESS=0` (the frame check reads plain
-surfaces only):
+Mac mini M4 Pro, test VM full screen at 5120x2880, 120 Hz, on a second login session's virtual display
+(Screen Sharing's, not a panel), A B B A, a fresh VM per arm, 20 s windows; the "like mini" rows use the
+GPU, display and SMBIOS settings of the VM the Mac runs every day (Venus, five outputs, the tiled present, the pointer
+plane, OmacVM's virtio-gpu driver). QEMU GPU ms/s, means over the rounds (the gain of each round):
 
-| | Drawn (main) | Direct (prototype) |
-|---|---|---|
-| QEMU GPU ms/s, per run | 432, 480, 411, 450, 469, 451 | 393, 404, 362, 419, 432, 356 |
-| QEMU GPU ms/s, mean | 449 | 394 (-54: -0.45 ms a frame, rounds -0.33 to -0.54) |
-| WindowServer GPU ms/s | 0-5 | 0-5 |
-| Runs of refreshes without a new frame (QEMU's repeats), per ~2420 refreshes | 34, 26, 9, 1, 3, 16 | 6, 9, 3, 8, 28, 1 |
-| Key to frame on the layer, page idle, medians | 19.4, 11.9, 11.6, 11.0 ms | 15.2, 11.1, 9.3, 8.9 ms |
-| Key to frame on the layer, page at 120 fps | 56.5, 46.9, 54.2, 49.3 ms | 48.1, 53.7, 52.5, 44.7 ms |
+| Workload | Rounds | Drawn (before) | Direct (after) | Gain |
+|---|---|---|---|---|
+| Canvas redrawing the whole frame at 120 fps | 3 | 477 | 417 | 60 ms/s, 0.50 ms a frame (31, 79, 71) |
+| The same, like mini | 3 | 481 | 415 | 66 ms/s, 0.55 ms a frame (122, 19, 58) |
+| The same, HDR (10-bit PQ) | 3 | 495 | 456 | 39 ms/s, 0.33 ms a frame (4, 43, 71) |
+| Page scroll in Chromium, like mini | 2 | 382 | 348 | 34 ms/s (0, 68) |
+| 4K60 video in mpv, like mini | 2 | 404 | 371 | 33 ms/s (54, 12) |
+| Busy terminal (foot, 120 lines/s), like mini | 2 | 370 | 292 | 78 ms/s (100, 56) |
 
-The ceiling, the same present with its draw skipped (a stale picture), was 72 ms/s (0.60 ms a frame).
-WindowServer's GPU time stayed at 0-5 ms/s in both arms on that display, so the gain measured is QEMU's
-draw only. How long WindowServer keeps the previous buffer on a real panel, and so how often the
-move-copy runs there, was not measured: on a panel the gain lies between 0 and the 0.60 ms ceiling.
-Latency is to the commit before the vsync (add about 3 ms). The session has no screen recording, so
-missed refreshes come from QEMU's present trace, and each frame's counters were read by QEMU from the
-surface as it went up (`OMACVM_TEST_PACE_CHECK=1`, plain 8-bit surfaces only), not from the screen: of
-about 71,600 frames read (75,400 shown direct), none had two different counters and none was written
-while shown. Resizing the guest's output (5120x2880 to 3840x2160 and back) kept that, with 1-4 skipped
-frames around each change; screenshots of both arms have the same pixels (colour tag, orientation,
-alpha); `grim` in the guest is right and needed no shadow copy. A VM started with HDR (10-bit buffers)
-gets nothing: those stay plain textures and are drawn as before; a switch between 8 and 10 bits while
-the VM runs was not exercised (the guest kept the depth it started with).
+WindowServer stayed at 12-38 ms/s in both arms. Refreshes without a new frame (runs of them, QEMU's
+trace) rose a little: 1.2 % to 1.6 % of the canvas's frames, 0.7 % to 1.3 % like mini; the guest's own
+frame rate (Chrome's rAF) was the same in both arms. Key to frame on the layer, page idle, medians of
+four VMs each: 19.4, 11.9, 11.6, 11.0 ms drawn, 15.2, 11.1, 9.3, 8.9 ms direct (the prototype's run).
 
-Open: 10-bit and HDR buffers (an `l10r` IOSurface), extra brightness (drawn wrong with such buffers now),
-second outputs, the spares' memory (59 MB each at 5K, outside the guest's budget), writes that skip
-virgl's check (see the patches' limits), power, and a real page scroll and video instead of the canvas.
+QEMU read each whole frame back from its surface as it went up (`OMACVM_TEST_PACE_CHECK=1`): in every
+run (the canvas, the scroll, the video, the terminal, HDR, the damage driver, a resize, a reboot, a
+burst's end) no frame was written while on the window, and none of the canvas's frames was torn (its
+two counter strips agreed). GPU safe mode (CAOpenGLLayer), the boot logo's probe, the hardware cursor
+and second outputs read the IOSurface's RECTANGLE texture.
+
+Not measured yet: a real panel (the test ran in a second login session, whose only display is Screen
+Sharing's), and power. On a panel WindowServer may hold buffers longer, which would make moves more
+frequent; the qemu.log line "scanout IOSurfaces, last 5 s" counts them.
 
 ### Cheaper ways to the same passes
 
