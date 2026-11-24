@@ -40,18 +40,24 @@ Item {
   // for a few seconds.
   property string failure: ""
 
+  // A refresh asked while one runs runs once more after it: the running
+  // one may have read the state before the reason for the new one.
+  property bool refreshAgain: false
+
   // Until the app echoes it back, the panel shows the balance asked for.
   property real pendingBalance: -1
   readonly property real balanceValue: pendingBalance >= 0 ? pendingBalance : (balance ? balance.value : 0.5)
 
   readonly property var command: ["/usr/bin/env", "/usr/local/bin/omacvm", "sound"]
 
-  // The app answered or failed to; pressed: a press of a row answered with the
-  // list as it stands, where macOS may keep the modes of headphones closed.
-  signal answered(bool pressed)
+  // The app answered or failed to; request: "press" when a press of a row
+  // answered with the list, "list" when a read or a mode did, else "" (the
+  // state, a failure). A press's list is as it stands, where macOS may keep
+  // the modes of headphones closed.
+  signal answered(string request)
 
   function refresh() {
-    if (stateProc.running) return
+    if (stateProc.running) { refreshAgain = true; return }
     stateProc.command = command.concat(["--json"])
     stateProc.running = true
   }
@@ -109,11 +115,12 @@ Item {
 
   Process {
     id: stateProc
+    onRunningChanged: if (!running && sound.refreshAgain) { sound.refreshAgain = false; sound.refresh() }
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         if (sound.take(text) !== "") sound.available = false
-        sound.answered(false)
+        sound.answered("")
       }
     }
   }
@@ -123,7 +130,7 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var pressed = sound.pressing !== ""
+        var request = sound.pressing !== "" ? "press" : "list"
         sound.failure = sound.take(text)
         sound.pressing = ""
         sound.switching = null
@@ -131,7 +138,7 @@ Item {
         // macOS took the grant away meanwhile: no message, the state says so.
         if (sound.failure === "accessibility") sound.failure = ""
         if (sound.failure !== "") failureClear.restart()
-        sound.answered(pressed && !failed)
+        sound.answered(failed ? "" : request)
         // Without a list the state alone: the output and its balance now.
         if (failed) sound.refresh()
       }
