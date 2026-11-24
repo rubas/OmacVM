@@ -28,7 +28,8 @@ the marker's flips for key latency.
 Why: the present's draw cost 0.60 ms of GPU a frame at 5120x2880.
 Upstream: not sent (OmacVM's IOSurface present).
 Tests: VM A/B and the frame check in docs/experiments/display-path.md.
-Applies after omacvm-cocoa-no-app-nap.patch, with virgl-scanout-iosurface.patch.
+Applies before omacvm-cocoa-no-app-nap.patch (the last cocoa patch), with
+virgl-scanout-iosurface.patch.
 diff --git a/hw/display/virtio-gpu-virgl.c b/hw/display/virtio-gpu-virgl.c
 index de2019d..4d44af4 100644
 --- a/hw/display/virtio-gpu-virgl.c
