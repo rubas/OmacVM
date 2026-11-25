@@ -71,7 +71,7 @@ expect "check.yml has an app job" 1 "$(v has_app)"
 expect "the app job runs where the macOS check runs (same runs-on)" 1 "$(v runs_on_same)"
 expect "... which is the mini for own-repo runs" 1 "$(v runs_on_mini)"
 expect "the app job skips forks, manual runs, and this fork (no Mac mini, #26)" \
-  "github.repository != 'rubas/OmacVM' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)" "$(v if)"
+  "github.repository != 'rubas/omacvm' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)" "$(v if)"
 t=$(v timeout)
 if [[ $t =~ ^[0-9]+$ ]] && (( t >= 10 && t <= 60 )); then ok "the app job has a time limit ($t min)"; else bad "the app job's timeout-minutes: '$t'"; fi
 expect "the app job's steps run bash with pipefail (build-app.sh | tee)" 1 "$(v shell_bash)"
