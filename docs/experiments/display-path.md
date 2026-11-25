@@ -159,8 +159,21 @@ idle (macOS against macOS, two sets).
   frames it did not drop without it (lab rows on the M1 Max and the Air). Its M1 Max watt rows are from the
   morning of 2026-10-25, before the row checks: not proven, no number here. Closed.
 - **Fence answer naps** (#530): no gain in the browser A/B. Closed.
-- **Hyprland direct scanout** for a full-screen client: never engaged in a test VM; blocked by the primary
-  plane offering only XRGB8888 (Linux 7.4 adds ARGB8888) and by the software cursor while it shows.
+- **Hyprland direct scanout** for a full-screen client (2026-11-25, Hyprland 0.57.2, the direct present, a
+  test VM like mini at 5120x2880): with ARGB8888 on the primary plane (a branch of OmacVM's virtio-gpu patch,
+  not merged) and the 10-bit formats too (`deep_color`), it engages for a full-screen mpv (its 10-bit buffer
+  goes on the plane), but QEMU then draws that buffer into half-float surfaces, as it is no IOSurface: 4K60
+  video, A B B A x 3 in one VM, QEMU 475 GPU ms/s off, 480 on. Hyprland's two passes are gone, QEMU's copy is
+  back. Chromium never goes direct at scale 2: Hyprland's opacity check compares the surface's opaque region
+  (in points) with the buffer (in pixels), and Chromium's buffers have alpha. foot draws into shm buffers,
+  which no plane takes. Omarchy's notification layer blocks it while a notification shows (the shell steps
+  aside under a full-screen window otherwise). With `render:direct_scanout` on and only 8-bit formats on the
+  plane, Hyprland 0.57 retried a 10-bit modeset about 40 times a second while mpv was full screen (its log:
+  "format XR30 isn't supported by primary backend"); `direct_scanout` is off by default. The pointer is no
+  blocker in mini's setup (the Mac pointer: Hyprland's cursor plane). Dropped until a client's buffer can be
+  an IOSurface and Hyprland's check passes Chromium. `quirks:skip_non_kms_dmabuf_formats` stays off in
+  `omacvm_vm.lua`: OmacVM's driver loads only with one of the app's switches, the stock plane has XRGB8888
+  only.
 - **Chromium's Wayland overlay delegation**: no change (Air 3.96 vs 4.00 W).
 - **Guest at 60 Hz instead of 120 Hz while a 30 fps video plays** (Air): no change.
 - **YouTube's network path**: about 1 % of a core, ~50 mW; the rest of YouTube's extra cost is its own page
@@ -296,10 +309,8 @@ frequent; the qemu.log line "scanout IOSurfaces, last 5 s" counts them.
 
 ### Cheaper ways to the same passes
 
-- **Hyprland direct scanout** for a full-screen client (render:direct_scanout 1): the client's buffer goes to
-  the plane as it is, which skips Hyprland's two passes (work buffer + copy to the scanout buffer). Blocked in
-  our VMs by the primary plane offering only XRGB8888 (a client's buffer in another format cannot go on it;
-  Linux 7.4 adds ARGB8888) and by the software cursor while it shows (not once it hides). In a
-  test VM on the mini (`render:direct_scanout 1`) it never engaged.
+- **Hyprland direct scanout** for a full-screen client (render:direct_scanout 1): measured and dropped above
+  (2026-11-25): it engages for mpv once the plane takes its format, and saves nothing while QEMU must copy
+  the client's buffer.
 - **Skia on Vulkan** in Chrome removes Chrome's NV12 -> ARGB step (VA-API video processing) because NV12 counts
   as renderable there (the chrome-hw-decode lane's finding): the browser-gpu lane's field.
