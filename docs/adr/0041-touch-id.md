@@ -1015,9 +1015,10 @@ Password > Apple Watch), as macOS's own prompts do.
   ID or Esc"), and the panel of an app from before this change refuses a
   watch alone (`no-touch-id`).
 - `canEvaluatePolicy` false is never `cancelled`: `lockout` for a lockout,
-  else `no-touch-id`, or `lid-closed` while IOPMrootDomain's
-  `AppleClamshellState` says the lid is closed. Neither counts as a miss.
-  The VM says "Touch ID not available (Mac lid closed, no Apple Watch), use
+  else `no-touch-id`. A `no-touch-id` (also a watch gone during its
+  dialog) is `lid-closed` while IOPMrootDomain's `AppleClamshellState` says
+  the lid is closed. Neither counts as a miss.
+  The VM says "Touch ID not available (Mac lid closed, no Apple Watch ready), use
   your password" and puts the same in the journal; an older client says
   "the Mac said lid-closed".
 
