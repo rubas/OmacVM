@@ -337,7 +337,7 @@ gain of each round), and the whole Mac from rounds without other load on the Mac
 |---|---|---|---|---|---|
 | Canvas redrawing the whole frame at 120 fps | 3 | 507 | 455 | 52 ms/s (73, 65, 19) | 13.3 -> 12.5 W |
 | Page scroll in Chromium | 2 | 461 | 386 | 75 ms/s (71, 79) | 13.3 -> 12.4 W |
-| 4K60 video in mpv | 2 | 457 | 487 | -30 ms/s (-15, -46) | 16.1 -> 15.6 W |
+| 4K60 video in mpv | 2 | 474 | 487 | -13 ms/s (a drawn arm beside other load left out) | 16.1 -> 15.6 W |
 | Busy terminal (foot, 120 lines/s) | 2, one pair left out | 387 | 293 | 94 ms/s; 0.71 ms a frame shown | - |
 
 WindowServer used no GPU time in either arm: the panel shows the full-screen layer without a composite.
@@ -347,7 +347,8 @@ GPU time rose with the direct present while its GPU energy and the whole Mac fel
 repeats from 0.93 % to 1.30 %, as on the virtual display. mini started again by itself during the last
 terminal round; the table leaves that round's second pair out, and the terminal's other runs had other load
 on the Mac (27 to 42 W). The frame check (`OMACVM_TEST_PACE_CHECK=1`, the direct present) found no torn
-frame and none written while shown in 2386 canvas, 2358 scroll, 1493 video and 1850 terminal frames.
+frame and none written while shown in 2386 canvas, 2358 scroll, 1493 video and 1850 terminal frames; it ran
+after mini was back, with WindowServer compositing the window (144 to 147 ms/s).
 
 Moves come in bursts on the panel: 0 to 44 per 20 s in most arms, but 452 in one canvas arm and 264 and 169
 in two scroll arms, up to 40 % of the writes for 10 s. All of them were buffers WindowServer still held,
