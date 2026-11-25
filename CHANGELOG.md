@@ -10,7 +10,7 @@ in more words.
   Touch ID & Password → Apple Watch). With the MacBook's lid closed, macOS turns Touch ID off, so the
   watch answers alone, in macOS's own dialog. Before, the request went to the password and the VM
   said nothing, as if you had cancelled. With the lid closed and no watch, the VM now says "Touch ID
-  not available (Mac lid closed, no Apple Watch), use your password". It needs the app update and
+  not available (Mac lid closed, no Apple Watch ready), use your password". It needs the app update and
   Update VM.
 - **Scroll momentum: Chrome scrolls as far as macOS again.** Chromium's field trial config, which
   Chrome for Testing applies, turns on `WaylandUnscaledTouchpadScrolling`, and a two-finger scroll
