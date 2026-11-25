@@ -292,10 +292,27 @@ plane, OmacVM's virtio-gpu driver). QEMU GPU ms/s, means over the rounds (the ga
 | 4K60 video in mpv, like mini | 2 | 404 | 371 | 33 ms/s (54, 12) |
 | Busy terminal (foot, 120 lines/s), like mini | 2 | 370 | 292 | 78 ms/s (100, 56) |
 
-WindowServer stayed at 12-38 ms/s in both arms. Refreshes without a new frame (runs of them, QEMU's
-trace) rose a little: 1.2 % to 1.6 % of the canvas's frames, 0.7 % to 1.3 % like mini; the guest's own
-frame rate (Chrome's rAF) was the same in both arms. Key to frame on the layer, page idle, medians of
-four VMs each: 19.4, 11.9, 11.6, 11.0 ms drawn, 15.2, 11.1, 9.3, 8.9 ms direct (the prototype's run).
+WindowServer stayed at 12-38 ms/s in both arms. Key to frame on the layer, page idle, medians of four VMs
+each: 19.4, 11.9, 11.6, 11.0 ms drawn, 15.2, 11.1, 9.3, 8.9 ms direct (the prototype's run).
+
+Power, the canvas like mini, A B B A x 3 on 2026-11-25, measured with
+[display-path/socpower.c](display-path/socpower.c) (the SMC's system power, because the Mac mini has no
+battery gauge): the whole Mac drew 9.69 W drawn and 8.84 W direct, 0.84 W less (0.86, 0.85 and 0.81 W per
+round). These means leave out the last two arms of round 3, where another load on the Mac raised both to
+13.9 and 17.6 W. The GPU's own counter (IOReport) fell 0.18 W, from 1.20 to 1.03 W; the rest of the saving
+lies outside that counter.
+
+Refreshes without a new frame (runs of them, QEMU's trace) rose a little: 1.2 % to 1.6 % of the canvas's
+frames, 0.7 % to 1.3 % like mini. They follow the guest's own late frames: Chrome's rAF intervals over 1.5
+refreshes rose from 0.31 % to 0.48 % of its frames, and the runs with more late frames had more repeats.
+The cause is the GPU's clock. Without the present's draw the GPU was busy 49-56 % of the time instead of
+61-69 %, and the Mac kept it in its slowest performance state (P1) for 97-99 % of that time instead of
+91-96 %. At that clock the guest's frames take longer, and a few more miss the guest's vblank. A lab build
+that copies each direct frame into a scratch texture and throws it away (the drawn present's GPU load)
+brought the late frames back down: 0.29 % against 0.68 % direct in the same A B B A x 3, repeats 0.68 %
+against 0.87 %, at 536 against 453 QEMU GPU ms/s and 1.2 W more for the whole Mac. macOS has no public API
+that holds the GPU's clock up, so there is no cheaper fix: the direct present stays, 0.84 W for one more late
+frame every 2 to 5 s at 120 fps.
 
 QEMU read each whole frame back from its surface as it went up (`OMACVM_TEST_PACE_CHECK=1`): in every
 run (the canvas, the scroll, the video, the terminal, HDR, the damage driver, a resize, a reboot, a
@@ -303,9 +320,27 @@ burst's end) no frame was written while on the window, and none of the canvas's 
 two counter strips agreed). GPU safe mode (CAOpenGLLayer), the boot logo's probe, the hardware cursor
 and second outputs read the IOSurface's RECTANGLE texture.
 
-Not measured yet: a real panel (the test ran in a second login session, whose only display is Screen
-Sharing's), and power. On a panel WindowServer may hold buffers longer, which would make moves more
-frequent; the qemu.log line "scanout IOSurfaces, last 5 s" counts them.
+Not measured yet: a real panel. The test ran in a second login session, whose only display is Screen
+Sharing's. On a panel WindowServer may hold buffers longer, which would make moves more frequent; the
+qemu.log line "scanout IOSurfaces, last 5 s" counts them.
+
+### Hyprland 0.57 against 0.56 (2026-11-25)
+
+Omarchy's stable channel, which mini and every new VM use, has Hyprland 0.56.2-7; its edge channel has
+0.57.2-2. Hyprland 0.57 still draws each frame into its work buffer and then copies it to the scanout, but
+its frames cost the Mac's GPU less. The test VM like mini with the direct present ran 0.57.2-2 against an
+APFS clone of its disk with 0.56.2-7 (and the aquamarine 0.15.1 and hyprgraphics 0.5.1 that go with it), A B
+B A, a fresh VM per arm, 20 s windows. QEMU GPU ms/s, means over the rounds (the gain of each round):
+
+| Workload | Rounds | 0.56.2 | 0.57.2 | Gain |
+|---|---|---|---|---|
+| Canvas redrawing the whole frame at 120 fps | 3 | 485 | 453 | 32 ms/s, 0.34 ms a frame (47, 44, 5) |
+| Page scroll in Chromium | 2 | 348 | 287 | 61 ms/s, 0.53 ms a frame (52, 70) |
+| Busy terminal (foot, 120 lines/s) | 2 | 254 | 279 | none: -25 ms/s (-59, 8) |
+
+On the canvas Chrome's late frames fell from 2.3 % to 0.6 %, and the Mac's repeats from 2.5 % to 0.8 %.
+The frame check found no frame written while shown and no torn frame on either release. OmacVM pins no
+Hyprland release, so mini gets this with Omarchy's stable channel.
 
 ### Cheaper ways to the same passes
 
