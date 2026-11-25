@@ -328,9 +328,33 @@ burst's end) no frame was written while on the window, and none of the canvas's 
 two counter strips agreed). GPU safe mode (CAOpenGLLayer), the boot logo's probe, the hardware cursor
 and second outputs read the IOSurface's RECTANGLE texture.
 
-Not measured yet: a real panel. The test ran in a second login session, whose only display is Screen
-Sharing's. On a panel WindowServer may hold buffers longer, which would make moves more frequent; the
-qemu.log line "scanout IOSurfaces, last 5 s" counts them.
+On a real panel (2026-11-25): a Studio Display XDR at its native 5120x2880, 120 Hz, SDR (EDR headroom
+1.0, potential 16), the same test VM like mini full screen in the console user's own session, mini shut
+down for the run. A B B A, a fresh VM per arm, 20 s windows; QEMU GPU ms/s, means over the rounds (the
+gain of each round), and the whole Mac from rounds without other load on the Mac:
+
+| Workload | Rounds | Drawn (before) | Direct (after) | Gain | Whole Mac |
+|---|---|---|---|---|---|
+| Canvas redrawing the whole frame at 120 fps | 3 | 507 | 455 | 52 ms/s (73, 65, 19) | 13.3 -> 12.5 W |
+| Page scroll in Chromium | 2 | 461 | 386 | 75 ms/s (71, 79) | 13.3 -> 12.4 W |
+| 4K60 video in mpv | 2 | 457 | 487 | -30 ms/s (-15, -46) | 16.1 -> 15.6 W |
+| Busy terminal (foot, 120 lines/s) | 2, one pair left out | 387 | 293 | 94 ms/s; 0.71 ms a frame shown | - |
+
+WindowServer used no GPU time in either arm: the panel shows the full-screen layer without a composite.
+The GPU's own counter fell 0.19 W on the canvas, 0.21 W on the scroll and 0.24 W on the video. The video's
+GPU time rose with the direct present while its GPU energy and the whole Mac fell; its link ticked at 60 to
+97 Hz, differently in each arm. On the canvas Chrome's late frames rose from 0.54 % to 0.90 % and the Mac's
+repeats from 0.93 % to 1.30 %, as on the virtual display. mini started again by itself during the last
+terminal round; the table leaves that round's second pair out, and the terminal's other runs had other load
+on the Mac (27 to 42 W). The frame check (`OMACVM_TEST_PACE_CHECK=1`, the direct present) found no torn
+frame and none written while shown in 2386 canvas, 2358 scroll, 1493 video and 1850 terminal frames.
+
+Moves come in bursts on the panel: 0 to 44 per 20 s in most arms, but 452 in one canvas arm and 264 and 169
+in two scroll arms, up to 40 % of the writes for 10 s. All of them were buffers WindowServer still held,
+not ones queued in QEMU. Spares were never short (0 to 5 made per run, none let go), so another spare would
+not stop them: each move is the copy of a buffer the guest writes again while the panel still shows or
+holds it. The worst arm cost about 20 ms/s of the gain (478 against 455). A move without the copy would need
+to know that the guest overwrites the whole buffer; that is a known limit for now.
 
 ### Hyprland 0.57 against 0.56 (2026-11-25)
 
