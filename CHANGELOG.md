@@ -5,6 +5,13 @@ in more words.
 
 ## Unreleased
 
+- **Touch ID takes your Apple Watch, also with the lid closed.** sudo, polkit and 1Password in the VM
+  now also accept a double-click on an Apple Watch that may approve for the Mac (System Settings →
+  Touch ID & Password → Apple Watch). With the MacBook's lid closed, macOS turns Touch ID off, so the
+  watch answers alone, in macOS's own dialog. Before, the request went to the password and the VM
+  said nothing, as if you had cancelled. With the lid closed and no watch, the VM now says "Touch ID
+  not available (Mac lid closed, no Apple Watch ready), use your password". It needs the app update and
+  Update VM.
 - **Keys show sooner in Chromium, Chrome and Brave while a page moves.** Chromium-based browsers in the
   VM now keep one finished frame waiting instead of two, so on a page that animates a key reaches the
   screen about 10 ms sooner at 120 Hz (46 ms instead of 56 to the frame in a test VM). OmacVM puts
