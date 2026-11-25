@@ -294,9 +294,9 @@ plane, OmacVM's virtio-gpu driver). QEMU GPU ms/s, means over the rounds (the ga
 | Busy terminal (foot, 120 lines/s), like mini | 2 | 370 | 292 | 78 ms/s (100, 56); 0.39 and 0.47 ms a frame shown |
 
 The busy terminal's gain per second is partly fewer frames: in its round 1 both direct VMs drew 80 frames a
-second instead of about 98. Its VM sometimes draws far fewer frames for a whole run (61 to 85 a second
-instead of about 100): in 5 of 18 runs with the direct present, 1 of 6 with the lab copy below, and none of
-4 drawn.
+second instead of about 98. Its VM sometimes draws far fewer frames for a whole run (52 to 85 a second
+instead of about 100) with either present: in 5 of 18 runs direct, 5 of 16 drawn and 1 of 6 with the lab
+copy below. 24 of these 40 runs had other load beside them, such as CI jobs (the whole Mac at 18 to 62 W).
 
 WindowServer stayed at 12-38 ms/s in both arms. Key to frame on the layer, page idle, medians of four VMs
 each: 19.4, 11.9, 11.6, 11.0 ms drawn, 15.2, 11.1, 9.3, 8.9 ms direct (the prototype's run).
@@ -314,8 +314,9 @@ GPU was busy 49-56 % of the time instead of 61-69 %. A lab build that copies eac
 scratch texture and throws it away (the drawn present's GPU load) brought the late frames back down to
 0.29 %, against 0.68 % direct in the same A B B A x 3 (repeats 0.68 % against 0.87 %), at 536 against 453
 QEMU GPU ms/s and, in rounds 1 and 2, 1.2 W more for the whole Mac. The same build copying only a 16 x 16
-corner, with the same GPU wait and flush, kept the GPU busy 63-67 % of the time at almost no extra work:
-late frames 0.37 % against 0.50 %, repeats 0.62 % against 0.66 %, 0.16 W more. The direct arms and the
+corner, with the same GPU wait and flush, kept the GPU busy 63-67 % of the time in five of its six arms at
+almost no extra work: late frames 0.37 % against 0.50 %, repeats 0.62 % against 0.66 %, 0.16 W more (its
+first arm, beside another load at 21 W, left out). The direct arms and the
 16 x 16 copy ran the GPU at its slowest clock (P1) for 97-99 % of its busy time, the drawn arms 91-96 %, so
 the clock alone doesn't explain it; the GPU's idle time between frames seems to matter too. Without root
 the Mac shows no more of its power states. We found no cheap way to keep the guest's frames on time: the direct
