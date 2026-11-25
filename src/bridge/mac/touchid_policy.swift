@@ -260,12 +260,12 @@ final class TouchIDDecider {
               gone: @escaping () -> Bool = { false }) -> TouchIDOutcome {
     guard on else { return .no(.off) }
     if let n = locked({ limits.admit(vm, now: now) }) { return .no(n) }
-    let outcome: TouchIDOutcome
+    var outcome: TouchIDOutcome
     if mac.locked { outcome = .no(.locked) }
     else if mac.frontType != type { outcome = .no(.notFront) }
     else {
       switch auth.answerer(passwordFallback: passwordFallback) {
-      case .unavailable(let n): outcome = .no(n == .noTouchID && mac.lidClosed ? .lidClosed : n)
+      case .unavailable(let n): outcome = .no(n)
       case let who:
         // OmacVM.app's panel is Touch ID's (the fingerprint, "Touch ID or Esc"):
         // with only a watch to answer, macOS's own dialog asks, which says how.
@@ -274,6 +274,7 @@ final class TouchIDDecider {
         outcome = auth.evaluate(p, passwordFallback: passwordFallback, timeout: timeout, gone: gone)
       }
     }
+    if outcome == .no(.noTouchID) && mac.lidClosed { outcome = .no(.lidClosed) }
     // The pause after misses counts from the request's time (tests give it).
     locked {
       if case .no(let n) = outcome { limits.finished(vm, yes: false, no: n, now: now) } else { limits.finished(vm, yes: true, no: nil, now: now) }
