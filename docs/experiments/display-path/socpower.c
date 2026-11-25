@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 // libIOReport has no public header; these are the calls powermetrics and macmon use.
@@ -96,6 +97,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     CFDictionaryRef a = IOReportCreateSamples(sub, subbed, NULL);
     double sys = 0;
     int nsys = 0;
@@ -108,6 +111,8 @@ int main(int argc, char **argv)
         }
     }
     CFDictionaryRef b = IOReportCreateSamples(sub, subbed, NULL);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double took = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
     CFDictionaryRef d = IOReportCreateSamplesDelta(a, b, NULL);
     CFArrayRef chans = CFDictionaryGetValue(d, CFSTR("IOReportChannels"));
 
@@ -138,6 +143,6 @@ int main(int argc, char **argv)
         }
     }
     printf("{\"seconds\":%.1f,\"sys_w\":%.2f,\"gpu_w\":%.3f,\"gpu_states\":{%s}}\n",
-           secs, nsys ? sys / nsys : -1, gpu_j / secs, states);
+           took, nsys ? sys / nsys : -1, gpu_j / took, states);
     return 0;
 }

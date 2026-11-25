@@ -299,7 +299,7 @@ Power, the canvas like mini, A B B A x 3 on 2026-11-25, measured with
 [display-path/socpower.c](display-path/socpower.c) (the SMC's system power, because the Mac mini has no
 battery gauge): the whole Mac drew 9.69 W drawn and 8.84 W direct, 0.84 W less (0.86, 0.85 and 0.81 W per
 round). These means leave out the last two arms of round 3, where another load on the Mac raised both to
-13.9 and 17.6 W. The GPU's own counter (IOReport) fell 0.18 W, from 1.20 to 1.03 W; the rest of the saving
+13.9 and 17.6 W. The GPU's own counter (IOReport) fell 0.17 W, from 1.13 to 0.96 W; the rest of the saving
 lies outside that counter.
 
 Refreshes without a new frame (runs of them, QEMU's trace) rose a little: 1.2 % to 1.6 % of the canvas's
