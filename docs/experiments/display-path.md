@@ -9,8 +9,9 @@ measured and dropped, and the gap that is left. The bench tool is
 ## How the numbers were taken
 
 - Watts are the whole Mac's, from the battery gauge's accumulators (SystemLoad, on the adapter, not
-  charging), means over windows of 180-300 s. GPU time per process (milliseconds of GPU work per second) is
-  the process's AGX `accumulatedGPUTime`.
+  charging), means over windows of 180-300 s. The Mac mini has no battery: its watts are the SMC's system
+  power (key PSTR), read every 100 ms by [display-path/socpower.c](display-path/socpower.c). GPU time per
+  process (milliseconds of GPU work per second) is the process's AGX `accumulatedGPUTime`.
 - MacBook Air M2: brightness 0, the 60 Hz panel, unless a row says 120 Hz (a virtual display).
 - MacBook Pro M1 Max (XDR panel, 120 Hz): a test VM like a real one (10 vCPUs, 24 GB, full screen
   3024x1896 at 120 Hz, HDR on, animations on), brightness 0.500, with checks before and after every row
@@ -172,8 +173,8 @@ idle (macOS against macOS, two sets).
   "format XR30 isn't supported by primary backend"); `direct_scanout` is off by default. The pointer is no
   blocker in mini's setup (the Mac pointer: Hyprland's cursor plane). Dropped until a client's buffer can be
   an IOSurface and Hyprland's check passes Chromium. `quirks:skip_non_kms_dmabuf_formats` stays off in
-  `omacvm_vm.lua`: OmacVM's driver loads only with one of the app's switches, the stock plane has XRGB8888
-  only.
+  `omacvm_vm.lua`: OmacVM's driver loads only with one of the app's switches, and the stock plane of Linux 7.3,
+  the guest's kernel, has XRGB8888 only.
 - **Chromium's Wayland overlay delegation**: no change (Air 3.96 vs 4.00 W).
 - **Guest at 60 Hz instead of 120 Hz while a 30 fps video plays** (Air): no change.
 - **YouTube's network path**: about 1 % of a core, ~50 mW; the rest of YouTube's extra cost is its own page
@@ -290,29 +291,35 @@ plane, OmacVM's virtio-gpu driver). QEMU GPU ms/s, means over the rounds (the ga
 | The same, HDR (10-bit PQ) | 3 | 495 | 456 | 39 ms/s, 0.33 ms a frame (4, 43, 71) |
 | Page scroll in Chromium, like mini | 2 | 382 | 348 | 34 ms/s (0, 68) |
 | 4K60 video in mpv, like mini | 2 | 404 | 371 | 33 ms/s (54, 12) |
-| Busy terminal (foot, 120 lines/s), like mini | 2 | 370 | 292 | 78 ms/s (100, 56) |
+| Busy terminal (foot, 120 lines/s), like mini | 2 | 370 | 292 | 78 ms/s (100, 56); 0.39 and 0.47 ms a frame shown |
+
+The busy terminal's gain per second is partly fewer frames: in its round 1 both direct VMs drew 80 frames a
+second instead of about 98. Its VM sometimes draws far fewer frames for a whole run (61 to 85 a second
+instead of about 100): in 5 of 18 runs with the direct present, 1 of 6 with the lab copy below, and none of
+4 drawn.
 
 WindowServer stayed at 12-38 ms/s in both arms. Key to frame on the layer, page idle, medians of four VMs
 each: 19.4, 11.9, 11.6, 11.0 ms drawn, 15.2, 11.1, 9.3, 8.9 ms direct (the prototype's run).
 
-Power, the canvas like mini, A B B A x 3 on 2026-11-25, measured with
-[display-path/socpower.c](display-path/socpower.c) (the SMC's system power, because the Mac mini has no
-battery gauge): the whole Mac drew 9.69 W drawn and 8.84 W direct, 0.84 W less (0.86, 0.85 and 0.81 W per
-round). These means leave out the last two arms of round 3, where another load on the Mac raised both to
-13.9 and 17.6 W. The GPU's own counter (IOReport) fell 0.17 W, from 1.13 to 0.96 W; the rest of the saving
-lies outside that counter.
+Power, the canvas like mini, A B B A x 3 on 2026-11-25: the whole Mac drew 9.69 W drawn and 8.84 W
+direct, 0.84 W less (0.86, 0.85 and 0.81 W per round). These means leave out the last two arms of round
+3, where another load on the Mac raised both to 13.9 and 17.6 W. The GPU's own counter (IOReport) fell
+0.17 W, from 1.13 to 0.96 W; the rest of the saving lies outside that counter.
 
 Refreshes without a new frame (runs of them, QEMU's trace) rose a little: 1.2 % to 1.6 % of the canvas's
 frames, 0.7 % to 1.3 % like mini. They follow the guest's own late frames: Chrome's rAF intervals over 1.5
 refreshes rose from 0.31 % to 0.48 % of its frames, and the runs with more late frames had more repeats.
-The cause is the GPU's clock. Without the present's draw the GPU was busy 49-56 % of the time instead of
-61-69 %, and the Mac kept it in its slowest performance state (P1) for 97-99 % of that time instead of
-91-96 %. At that clock the guest's frames take longer, and a few more miss the guest's vblank. A lab build
-that copies each direct frame into a scratch texture and throws it away (the drawn present's GPU load)
-brought the late frames back down: 0.29 % against 0.68 % direct in the same A B B A x 3, repeats 0.68 %
-against 0.87 %, at 536 against 453 QEMU GPU ms/s and 1.2 W more for the whole Mac. macOS has no public API
-that holds the GPU's clock up, so there is no cheaper fix: the direct present stays, 0.84 W for one more late
-frame every 2 to 5 s at 120 fps.
+The guest's frames come late more often when the Mac's GPU has less to do: without the present's draw the
+GPU was busy 49-56 % of the time instead of 61-69 %. A lab build that copies each direct frame into a
+scratch texture and throws it away (the drawn present's GPU load) brought the late frames back down to
+0.29 %, against 0.68 % direct in the same A B B A x 3 (repeats 0.68 % against 0.87 %), at 536 against 453
+QEMU GPU ms/s and, in rounds 1 and 2, 1.2 W more for the whole Mac. The same build copying only a 16 x 16
+corner, with the same GPU wait and flush, kept the GPU busy 63-67 % of the time at almost no extra work:
+late frames 0.37 % against 0.50 %, repeats 0.62 % against 0.66 %, 0.16 W more. The direct arms and the
+16 x 16 copy ran the GPU at its slowest clock (P1) for 97-99 % of its busy time, the drawn arms 91-96 %, so
+the clock alone doesn't explain it; the GPU's idle time between frames seems to matter too. Without root
+the Mac shows no more of its power states. We found no cheap way to keep the guest's frames on time: the direct
+present stays as it is, 0.84 W for one more late frame every 2 to 5 s at 120 fps.
 
 QEMU read each whole frame back from its surface as it went up (`OMACVM_TEST_PACE_CHECK=1`): in every
 run (the canvas, the scroll, the video, the terminal, HDR, the damage driver, a resize, a reboot, a
@@ -334,9 +341,9 @@ B A, a fresh VM per arm, 20 s windows. QEMU GPU ms/s, means over the rounds (the
 
 | Workload | Rounds | 0.56.2 | 0.57.2 | Gain |
 |---|---|---|---|---|
-| Canvas redrawing the whole frame at 120 fps | 3 | 485 | 453 | 32 ms/s, 0.34 ms a frame (47, 44, 5) |
-| Page scroll in Chromium | 2 | 348 | 287 | 61 ms/s, 0.53 ms a frame (52, 70) |
-| Busy terminal (foot, 120 lines/s) | 2 | 254 | 279 | none: -25 ms/s (-59, 8) |
+| Canvas redrawing the whole frame at 120 fps | 3 | 485 | 453 | 32 ms/s (47, 44, 5); 0.34 ms a frame shown |
+| Page scroll in Chromium | 2 | 348 | 287 | 61 ms/s (52, 70); 0.53 ms a frame shown |
+| Busy terminal (foot, 120 lines/s) | 2 | 254 | 279 | none: -25 ms/s (-59, 8); -0.30 ms a frame shown |
 
 On the canvas Chrome's late frames fell from 2.3 % to 0.6 %, and the Mac's repeats from 2.5 % to 0.8 %.
 The frame check found no frame written while shown and no torn frame on either release. OmacVM pins no
@@ -345,7 +352,6 @@ Hyprland release, so mini gets this with Omarchy's stable channel.
 ### Cheaper ways to the same passes
 
 - **Hyprland direct scanout** for a full-screen client (render:direct_scanout 1): measured and dropped above
-  (2026-11-25): it engages for mpv once the plane takes its format, and saves nothing while QEMU must copy
-  the client's buffer.
+  (2026-11-25).
 - **Skia on Vulkan** in Chrome removes Chrome's NV12 -> ARGB step (VA-API video processing) because NV12 counts
   as renderable there (the chrome-hw-decode lane's finding): the browser-gpu lane's field.

@@ -98,8 +98,8 @@ int main(int argc, char **argv)
     }
 
     struct timespec t0, t1;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
     CFDictionaryRef a = IOReportCreateSamples(sub, subbed, NULL);
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     double sys = 0;
     int nsys = 0;
     for (int i = 0; i < (int)(secs * 10); i++) {
