@@ -32,7 +32,7 @@
 (* count), and the layer updates that the tick and an unlinked show make   *)
 (* after present_lock: both actions here show under the lock.              *)
 (*                                                                         *)
-(* Last matched these patches at #49 (1d3250f5).                           *)
+(* Last matched these patches at #49 (f62f8661).                           *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
