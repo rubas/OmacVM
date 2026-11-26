@@ -5,7 +5,7 @@ measure what reaches the Mac's screen, not what the guest thinks it drew.
 
 | File | Where | What |
 |---|---|---|
-| `pacing.html`, `srv.py`, `stats.py` | guest (`/opt/pacing`, `python3 srv.py` serves on 127.0.0.1:8765) | rAF loop that draws its frame number as 16 cells, a key-toggled marker; posts rAF intervals (`stats.py` summarises them); `?fps=N` draws only N new frames a second (video-like content) |
+| `pacing.html`, `srv.py`, `stats.py` | guest (`/opt/pacing`, `python3 srv.py` serves on 127.0.0.1:8765) | rAF loop that draws its frame number as 16 cells at the top and again at the bottom (QEMU's frame check, `OMACVM_TEST_PACE_CHECK=1`, counts a frame torn when they differ), a key-toggled marker; posts rAF intervals (`stats.py` summarises them); `?fps=N` draws only N new frames a second (video-like content) |
 | `cadence.py` | Mac | from a `sckpace` log of `pacing.html?fps=N`: how many refreshes each frame stayed on screen, and the share held exactly as long as it should |
 | `dispcap.swift` | Mac | how often a whole display's picture changes (ScreenCaptureKit complete frames per second, small capture), for the refresh-rate and power tests |
 | `colors.html` | guest | six colour bars (red, green, blue, white, grey, black) |
