@@ -5,6 +5,8 @@
 <script>
 // Frame pacing probe: each rAF draws its frame number as 16 bits (cells 1..16) between a white
 // marker (cell 0) and a black marker (cell 17), plus a moving bar. rAF intervals go to /stats.
+// The same counter strip sits at the bottom, drawn last so that nothing covers it: QEMU's frame
+// check (OMACVM_TEST_PACE_CHECK=1) counts a frame torn when the two strips differ.
 // ?fps=24 draws a new frame only when a 24 fps clock ticks (video-like content at a fixed rate);
 // ?hz=60 on a 60 Hz display (default 120).
 const c = document.getElementById('c'), g = c.getContext('2d', {alpha: false});
@@ -24,15 +26,19 @@ function frame(t) {
     tick = k;
   }
   const W = c.width, H = c.height, cell = Math.floor(W / 24);
+  const strip = y => {
+    for (let i = 0; i < 18; i++) {
+      const bit = i == 0 ? 1 : i == 17 ? 0 : (n >> (i - 1)) & 1;
+      g.fillStyle = bit ? '#fff' : '#000';
+      g.fillRect(cell * (i + 1), y, cell, cell);
+    }
+  };
   g.fillStyle = '#202020'; g.fillRect(0, 0, W, H);
-  for (let i = 0; i < 18; i++) {
-    const bit = i == 0 ? 1 : i == 17 ? 0 : (n >> (i - 1)) & 1;
-    g.fillStyle = bit ? '#fff' : '#000';
-    g.fillRect(cell * (i + 1), cell, cell, cell);
-  }
+  strip(cell);
   g.fillStyle = mark ? '#fff' : '#000'; g.fillRect(cell, cell * 2.2, cell, cell);
   const x = (n * 8) % W; g.fillStyle = '#4af'; g.fillRect(x, cell * 3, cell / 2, H - cell * 4);
   for (let i = 0; i < load; i++) { g.fillStyle = `hsl(${(i*7+n)%360},60%,50%)`; g.fillRect((i*37)%W, cell*3+(i*53)%(H-cell*4), 40, 40); }
+  strip(H - 2 * cell);
   if (last) iv.push(t - last); else t0 = t;
   last = t; n++;
   if (t - t0 < secs * 1000) requestAnimationFrame(frame);
