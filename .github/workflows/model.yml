@@ -1,0 +1,43 @@
+# TLC checks model/Present.tla when the present code it models, the model or its tools change.
+name: model
+
+on:
+  pull_request:
+    paths:
+      - app/runtime/patches/omacvm-cocoa-present-direct.patch
+      - app/runtime/patches/omacvm-cocoa-present-tiles.patch
+      - app/runtime/patches/qemu-cocoa-gl-present-vsync.patch
+      - app/runtime/patches/qemu-cocoa-gl-present-trim.patch
+      - model/**
+      - .github/workflows/model.yml
+  push:
+    branches: [main]
+    paths:
+      - app/runtime/patches/omacvm-cocoa-present-direct.patch
+      - app/runtime/patches/omacvm-cocoa-present-tiles.patch
+      - app/runtime/patches/qemu-cocoa-gl-present-vsync.patch
+      - app/runtime/patches/qemu-cocoa-gl-present-trim.patch
+      - model/**
+      - .github/workflows/model.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tlc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: TLC, the window's direct present (the promise holds; the present before #49 breaks it)
+        run: model/check.sh
