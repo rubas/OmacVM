@@ -16,13 +16,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/omacvm-present-direct.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
 # The definition (not a prototype) of the function whose first line starts with $2.
-fbody() {
-  awk -v h="$2" '
-    !on && !buf && index($0, h) == 1 { buf = $0 "\n"; if ($0 ~ /;[ \t]*$/) buf = ""; next }
-    buf && !on { if ($0 == "{") { on = 1; printf "%s", buf; print; next }
-                 buf = buf $0 "\n"; if ($0 ~ /;[ \t]*$/) buf = ""; next }
-    on { print; if ($0 ~ /^}$/) exit }' "$1"
-}
+body() { awk -v h="$2" 'index($0, h) == 1 && $0 !~ /;$/ {on=1} on {print} on && /^}$/ {exit}' "$1"; }
 chk() { local what=$1; shift; if "$@"; then echo "ok $what"; else echo "FAIL $what"; fi; }
 has() { grep -qF -- "$2" <<<"$1"; }
 # A before B (fixed strings), in that order in the text.
@@ -33,30 +27,26 @@ extract() {
   local m=$1 h
   awk '/^typedef struct PresentFrame \{$/ {on=1} on {print} on && /^\} PresentFrame;$/ {exit}' "$m" > "$work/present-frames.inc"
   for h in 'static void present_frame_put(PresentFrame *f)' 'static void present_frame_absorb(PresentFrame *newer, PresentFrame *older)'; do
-    fbody "$m" "$h" >> "$work/present-frames.inc"
+    body "$m" "$h" >> "$work/present-frames.inc"
   done
   grep -x 'static PresentFrame present_pend;' "$m" >> "$work/present-frames.inc"
-  fbody "$m" 'static void present_frame_skip(PresentFrame *older, PresentFrame *next)' >> "$work/present-frames.inc"
+  body "$m" 'static void present_frame_skip(PresentFrame *older, PresentFrame *next)' >> "$work/present-frames.inc"
 }
 # 1 when the extracted PresentFrame marks direct frames
 direct_field() { grep -qE '^ +bool direct;' "$work/present-frames.inc" && echo 1 || echo 0; }
 build() { # $1 = HAVE_DIRECT
-  [[ -f $work/omacvm-present-tiles.h ]] || {
-    mkdir -p "$work/tiles"
-    patch -s -d "$work/tiles" -p1 -f -i "$patches/omacvm-cocoa-present-tiles-logic.patch" &&
-      cp "$work/tiles/ui/omacvm-present-tiles.h" "$work/"
-  } || return 1
-  cc -std=c11 -Wall -Wextra -Werror -Wno-unused-function -DHAVE_DIRECT="$1" -I"$work" \
+  patch -s -d "$work" -p1 -f -i "$patches/omacvm-cocoa-present-tiles-logic.patch" || return 1
+  cc -std=c11 -Wall -Wextra -Werror -Wno-unused-function -DHAVE_DIRECT="$1" -I"$work" -I"$work/ui" \
     "$here/test-present-direct.c" -o "$work/t" 2>"$work/cc.log" || { cat "$work/cc.log" >&2; return 1; }
 }
 
 wiring() {
   local m=$1 send direct present bh vsync trims
-  send=$(fbody "$m" 'static void cocoa_gl_present_send(IOSurfaceRef surf, GLsync sync, void *gfence,')
-  direct=$(fbody "$m" 'static bool cocoa_gl_present_direct(const DisplayGLTexture *texture, IOSurfaceRef gsurf,')
-  present=$(fbody "$m" 'static bool cocoa_gl_present(void)')
-  bh=$(fbody "$m" 'static void cocoa_gl_present_bh(void *opaque)')
-  vsync=$(fbody "$m" 'static bool cocoa_gl_present_vsync(double T')
+  send=$(body "$m" 'static void cocoa_gl_present_send(IOSurfaceRef surf, GLsync sync, void *gfence,')
+  direct=$(body "$m" 'static bool cocoa_gl_present_direct(const DisplayGLTexture *texture, IOSurfaceRef gsurf,')
+  present=$(body "$m" 'static bool cocoa_gl_present(void)')
+  bh=$(body "$m" 'static void cocoa_gl_present_bh(void *opaque)')
+  vsync=$(body "$m" 'static bool cocoa_gl_present_vsync(double T')
   chk "a frame sent with the guest's fence is a direct frame" has "$send" '.direct = ops != NULL,'
   chk "the direct present sends the guest's buffer with its fence" has "$direct" \
     'cocoa_gl_present_send(gsurf, NULL, texture->iosurface_ops->fence(gl_scanout_id),'
@@ -79,11 +69,13 @@ if [[ ${1:-} == --self-test ]]; then
     old=
   fi
   build "$(direct_field)" || exit 1
-  if "$work/t" > "$work/old.out"; then
-    echo "FAIL the skip test passes on the code before the patch" >&2; cat "$work/old.out" >&2; exit 1
+  "$work/t" > "$work/old.out"
+  # its last line: every check ran (a crash or a test that never started says nothing)
+  if ! grep -qx 'test-present-direct: FAIL' "$work/old.out"; then
+    echo "FAIL the skip test passes or does not run on the code before the patch" >&2; cat "$work/old.out" >&2; exit 1
   fi
   # the build's log and CI look for the word FAIL: say these as "fails before"
-  grep '^FAIL' "$work/old.out" | grep -v 'test-present-direct: FAIL' | sed 's/^FAIL /  fails before the patch, as it should: /'
+  grep '^FAIL ' "$work/old.out" | sed 's/^FAIL /  fails before the patch, as it should: /'
   if [[ -n $old ]]; then
     passed=$(wiring "$old" | grep '^ok ' | grep -v '^ok (kept) ')
     if [[ -n $passed ]]; then echo "FAIL these wiring checks pass on the code before the patch:" >&2; echo "$passed" >&2; exit 1; fi

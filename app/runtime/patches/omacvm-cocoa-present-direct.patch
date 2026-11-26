@@ -98,7 +98,7 @@ index 6919ece..bf61982 100644
  
  typedef struct ScanoutTexture {
 diff --git a/ui/cocoa.m b/ui/cocoa.m
-index c5aa25a..b4eed57 100644
+index c5aa25a..4a2387c 100644
 --- a/ui/cocoa.m
 +++ b/ui/cocoa.m
 @@ -314,6 +314,13 @@ static void cocoa_gl_switch(DisplayChangeListener *dcl,
@@ -225,14 +225,14 @@ index c5aa25a..b4eed57 100644
          if (cocoa_gl_trace_enabled()) {
              GLenum blit_err = glGetError();
              GLint fb = 0;
-@@ -8947,6 +8965,7 @@ - (void)tick:(CADisplayLink *)link;
+@@ -8946,6 +8964,7 @@ - (void)tick:(CADisplayLink *)link;
+     GLint filter;
      double flushed;                     /* reached QEMU's present */
      bool linear;                        /* drawn in linear light (extra brightness) */
-     OmacvmPTFrame *pt;                  /* tiled present: tile updates (surf NULL) */
 +    bool direct;                        /* surf is the guest's own IOSurface (direct present) */
+     OmacvmPTFrame *pt;                  /* tiled present: tile updates (surf NULL) */
  } PresentFrame;
  
- static struct {
 @@ -9684,7 +9703,7 @@ static CGColorSpaceRef cocoa_gl_present_colorspace(bool deep, bool linear)
  static void cocoa_gl_layer_follow(CALayer *layer, IOSurfaceRef surf, bool linear)
  {

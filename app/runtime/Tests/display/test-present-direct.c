@@ -27,7 +27,6 @@ typedef int GLint;
 
 /* An IOSurface: its use count (IOSurfaceIncrementUseCount) and references (CFRetain). */
 typedef struct Surface {
-    const char *name;
     int use, refs;
 } *IOSurfaceRef;
 
@@ -69,7 +68,7 @@ static bool pend_empty(void) { return !present_pend.surf && !present_pend.pt; }
 
 int main(void)
 {
-    struct Surface guest = { .name = "the guest's buffer" }, drawn = { .name = "a drawn frame" };
+    struct Surface guest = { 0 }, drawn = { 0 };
 
     /* The trim after a tick skips the last frame of a scroll: nothing is queued after it. */
     present_tiles_on = 1;
@@ -81,8 +80,8 @@ int main(void)
     present_frame_put(&present_pend);
 
     /* A drop or a merge with a newer frame queued. */
-    guest = (struct Surface){ .name = "the guest's buffer" };
-    drawn = (struct Surface){ .name = "a drawn frame" };
+    guest = (struct Surface){ 0 };
+    drawn = (struct Surface){ 0 };
     f = frame(&guest, true);
     PresentFrame next = frame(&drawn, false);
     present_frame_skip(&f, &next);
@@ -91,7 +90,7 @@ int main(void)
     present_frame_put(&next);
 
     /* A drawn whole frame skipped with none after it: the next tile frame lies over it. */
-    drawn = (struct Surface){ .name = "a drawn frame" };
+    drawn = (struct Surface){ 0 };
     PresentFrame w = frame(&drawn, false);
     present_frame_skip(&w, NULL);
     check("tiles on: a drawn whole frame skipped with none after it waits in present_pend",
@@ -105,8 +104,8 @@ int main(void)
 
     /* Without the tiled present every skipped frame just goes. */
     present_tiles_on = 0;
-    guest = (struct Surface){ .name = "the guest's buffer" };
-    drawn = (struct Surface){ .name = "a drawn frame" };
+    guest = (struct Surface){ 0 };
+    drawn = (struct Surface){ 0 };
     f = frame(&guest, true);
     w = frame(&drawn, false);
     present_frame_skip(&f, NULL);
