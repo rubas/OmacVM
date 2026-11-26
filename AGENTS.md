@@ -1067,7 +1067,7 @@ The less obvious ones, with causes and where the fix lives, are in
   Pilot test settles on the drawn screen (`#body`), not on the state a worker
   thread set before the app's loop redraws; a time the code logged is compared
   with the event's own time, never with the clock at the check (a minute on).
-- `model/Present.tla` (TLA+; `model/check.sh`, CI `.github/workflows/model.yml`)
+- `app/runtime/model/Present.tla` (TLA+; `app/runtime/model/check.sh`, CI `.github/workflows/model.yml`)
   models the window's direct present: cocoa_gl_present's same-buffer rule, the
   vsync queue's skips, `present_pend` and `present_bh`. A PR that changes them
   in the patches its header names updates the model and its "Last matched"

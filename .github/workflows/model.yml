@@ -1,4 +1,4 @@
-# TLC checks model/Present.tla when the present code it models, the model or its tools change.
+# TLC checks app/runtime/model/Present.tla when the present code it models, the model or its tools change.
 name: model
 
 on:
@@ -9,7 +9,7 @@ on:
       - app/runtime/patches/qemu-cocoa-gl-present-vsync.patch
       - app/runtime/patches/qemu-cocoa-gl-present-trim.patch
       - app/runtime/patches/qemu-cocoa-gl-present-input-first.patch
-      - model/**
+      - app/runtime/model/**
       - .github/workflows/model.yml
   push:
     branches: [main]
@@ -19,7 +19,7 @@ on:
       - app/runtime/patches/qemu-cocoa-gl-present-vsync.patch
       - app/runtime/patches/qemu-cocoa-gl-present-trim.patch
       - app/runtime/patches/qemu-cocoa-gl-present-input-first.patch
-      - model/**
+      - app/runtime/model/**
       - .github/workflows/model.yml
 
 permissions:
@@ -42,4 +42,4 @@ jobs:
           distribution: temurin
           java-version: '21'
       - name: "TLC: the window's direct present keeps its promise, and the present before PR 49 breaks it"
-        run: model/check.sh
+        run: app/runtime/model/check.sh
