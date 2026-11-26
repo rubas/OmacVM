@@ -1308,8 +1308,14 @@ patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-hdr-follow.pa
 "$native_dir/Tests/display/test-hdr-follow.sh" "$source_dir/ui/cocoa.m" || \
   die "ui/cocoa.m: the depth hold or HDR only in full screen is not wired as tested (test-hdr-follow.sh)"
 # OmacVM: direct present: the guest's scanout IOSurface (virgl-scanout-iosurface.patch) as the
-# layer's contents, without the present's draw.
+# layer's contents, without the present's draw. A skipped frame of the guest's buffer gives it
+# back at once, also with the tiled present on, so the present after the tick sends it again.
+# The skip test and the wiring fail on the code before, then pass.
+"$native_dir/Tests/display/test-present-direct.sh" --self-test "$source_dir/ui/cocoa.m" || \
+  die "ui/cocoa.m: a direct present check passes without the patch (test-present-direct.sh)"
 patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-present-direct.patch"
+"$native_dir/Tests/display/test-present-direct.sh" "$source_dir/ui/cocoa.m" || \
+  die "ui/cocoa.m: a skipped frame of the guest's buffer does not go back as tested (test-present-direct.sh)"
 # OmacVM: no App Nap while the VM runs: with its window out of sight (screen
 # locked, another Space) macOS slowed the whole VM to a few percent, and on
 # macOS 27 clamped it to Utility QoS despite the activity.
