@@ -8,6 +8,7 @@ on:
       - app/runtime/patches/omacvm-cocoa-present-tiles.patch
       - app/runtime/patches/qemu-cocoa-gl-present-vsync.patch
       - app/runtime/patches/qemu-cocoa-gl-present-trim.patch
+      - app/runtime/patches/qemu-cocoa-gl-present-input-first.patch
       - model/**
       - .github/workflows/model.yml
   push:
@@ -17,6 +18,7 @@ on:
       - app/runtime/patches/omacvm-cocoa-present-tiles.patch
       - app/runtime/patches/qemu-cocoa-gl-present-vsync.patch
       - app/runtime/patches/qemu-cocoa-gl-present-trim.patch
+      - app/runtime/patches/qemu-cocoa-gl-present-input-first.patch
       - model/**
       - .github/workflows/model.yml
 
@@ -39,5 +41,5 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - name: TLC, the window's direct present (the promise holds; the present before #49 breaks it)
+      - name: "TLC: the window's direct present keeps its promise, and the present before PR 49 breaks it"
         run: model/check.sh

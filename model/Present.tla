@@ -5,15 +5,17 @@
 (*                                                                         *)
 (* Promise: once QEMU has nothing left to do for the window (no flush to   *)
 (* present, no frame in flight or queued, no present_bh), the layer shows  *)
-(* the buffer the guest flushed last, as the present would send it now.    *)
-(* Otherwise the window stays a frame behind until the guest draws again.  *)
+(* the buffer of the guest's scanout. Otherwise the window stays a frame   *)
+(* behind until the guest draws again. The layer's filter is not part of   *)
+(* it: a Zoom Interpolation change takes effect with the next frame.       *)
 (*                                                                         *)
 (* Covers app/runtime/patches/omacvm-cocoa-present-direct.patch            *)
 (* (cocoa_gl_present's same-buffer rule, cocoa_gl_present_send,            *)
 (* present_frame_skip's direct frames), omacvm-cocoa-present-tiles.patch   *)
 (* (present_frame_skip, present_frame_absorb, present_pend,                *)
 (* cocoa_gl_present_bh), qemu-cocoa-gl-present-vsync.patch and             *)
-(* qemu-cocoa-gl-present-trim.patch (cocoa_gl_present_queue_frame,         *)
+(* qemu-cocoa-gl-present-trim.patch and qemu-cocoa-gl-present-input-first   *)
+(* .patch (cocoa_gl_present_request, cocoa_gl_present_queue_frame,         *)
 (* cocoa_gl_present_vsync).                                                *)
 (*                                                                         *)
 (* Abstractions: every frame is a direct frame (the guest's buffers are    *)
@@ -24,7 +26,11 @@
 (* first, the quarter-second trim, the once-a-second drop) is free, as     *)
 (* their timing rules are left out. The window is in sight, vsync on.      *)
 (* "use" is QEMU's own use count; Core Animation's use of the buffer on    *)
-(* the layer is the "shown" half of the same-buffer rule.                  *)
+(* the layer is the "shown" half of the same-buffer rule. An unlinked show *)
+(* may happen whenever the queue is empty (more than the code does).       *)
+(* Not covered: a second output's window reading the same buffer (its use  *)
+(* count), and the layer updates that the tick and an unlinked show make   *)
+(* after present_lock: both actions here show under the lock.              *)
 (*                                                                         *)
 (* Last matched these patches at #49 (1d3250f5).                           *)
 (***************************************************************************)
@@ -64,12 +70,13 @@ vars == <<tiles, guest, how, dirty, bh, last, lastHow, use, inflight, queue,
 Dec(u, b) == [u EXCEPT ![b] = @ - 1]
 
 (* present_frame_skip(older, next) with present_frame_absorb: [use, pend] after it *)
+(* (hasNext: absorb(next, older), a whole next frame lets OLDER go) *)
 Skip(u, p, older, hasNext) ==
-    IF ~tiles \/ Fix THEN [use |-> Dec(u, older.buf), pend |-> p]
-    \* absorb(next, older): a whole next frame lets OLDER go
-    ELSE IF hasNext THEN [use |-> Dec(u, older.buf), pend |-> p]
+    IF ~tiles \/ Fix \/ hasNext THEN [use |-> Dec(u, older.buf), pend |-> p]
     \* absorb(older, &present_pend) lets the old one go; OLDER waits there
     ELSE [use |-> IF p = NoFrame THEN u ELSE Dec(u, p.buf), pend |-> older]
+
+Count(s, b) == Cardinality({i \in 1..Len(s) : s[i].buf = b})
 
 TypeOK ==
     /\ tiles \in BOOLEAN
@@ -97,11 +104,11 @@ Init ==
     /\ howChanges = 0
     /\ stopped = FALSE
 
-(* The guest draws into B and flushes it (virgl_cmd_resource_flush). A write into a *)
-(* buffer in use or on the layer goes to another IOSurface (virgl-scanout-iosurface). *)
-Write(b) ==
+(* The guest's scanout shows B and the window is dirty: a flush of a buffer it drew *)
+(* (a write into a buffer in use or on the layer goes to another IOSurface, *)
+(* virgl-scanout-iosurface.patch), or a buffer it drew before, set again. *)
+Scanout(b) ==
     /\ ~stopped
-    /\ use[b] = 0 /\ b # shown
     /\ guest' = b
     /\ dirty' = TRUE
     /\ UNCHANGED <<tiles, how, bh, last, lastHow, use, inflight, queue, pend,
@@ -114,13 +121,12 @@ Reflush ==
     /\ UNCHANGED <<tiles, guest, how, bh, last, lastHow, use, inflight, queue,
                    pend, shown, shownHow, howChanges, stopped>>
 
-(* Zoom interpolation or HDR changes: the window is drawn again. *)
+(* Zoom Interpolation or HDR changes; the window may be drawn again or not. *)
 ChangeHow ==
-    /\ ~stopped
     /\ howChanges < MaxHowChanges
     /\ how' = 1 - how
     /\ howChanges' = howChanges + 1
-    /\ dirty' = TRUE
+    /\ dirty' \in {dirty, TRUE}
     /\ UNCHANGED <<tiles, guest, bh, last, lastHow, use, inflight, queue, pend,
                    shown, shownHow, stopped>>
 
@@ -130,10 +136,13 @@ Stop ==
     /\ UNCHANGED <<tiles, guest, how, dirty, bh, last, lastHow, use, inflight,
                    queue, pend, shown, shownHow, howChanges>>
 
-(* cocoa_gl_present: PD_SAME, or PD_DIRECT through cocoa_gl_present_direct and *)
-(* cocoa_gl_present_send (CFRetain, IOSurfaceIncrementUseCount). *)
+(* cocoa_gl_present_request: with PRESENT_QUEUE frames queued or in flight it waits *)
+(* (gl_dirty stays) for the next tick's present_bh. cocoa_gl_present: PD_SAME, or *)
+(* PD_DIRECT through cocoa_gl_present_direct and cocoa_gl_present_send (CFRetain, *)
+(* IOSurfaceIncrementUseCount). *)
 Present ==
     /\ dirty
+    /\ Len(queue) + Len(inflight) < QMax
     /\ dirty' = FALSE
     /\ IF guest = last /\ how = lastHow /\ (guest = shown \/ use[guest] > 0)
        THEN UNCHANGED <<last, lastHow, use, inflight>>
@@ -185,7 +194,7 @@ Tick ==
     /\ \E input \in BOOLEAN, trims \in 0..2:
         LET q0 == IF input /\ Len(queue) > 1 THEN SubSeq(queue, Len(queue), Len(queue)) ELSE queue
             u0 == IF input /\ Len(queue) > 1
-                  THEN [b \in Bufs |-> use[b] - Cardinality({i \in 1..(Len(queue) - 1) : queue[i].buf = b})]
+                  THEN [b \in Bufs |-> use[b] - Count(SubSeq(queue, 1, Len(queue) - 1), b)]
                   ELSE use
             s == Head(q0)
             q1 == Tail(q0)
@@ -214,7 +223,7 @@ Bh ==
 Qemu == Present \/ QueueFrame \/ Tick \/ Bh
 
 Next ==
-    \/ \E b \in Bufs : Write(b)
+    \/ \E b \in Bufs : Scanout(b)
     \/ Reflush \/ ChangeHow \/ Stop
     \/ Qemu
 
@@ -223,16 +232,9 @@ Spec == Init /\ [][Next]_vars /\ WF_vars(Present) /\ WF_vars(QueueFrame)
 
 AtRest == ~dirty /\ ~bh /\ inflight = <<>> /\ queue = <<>>
 
-(* Accepted: the buffer on the layer is the right one, but a filter or HDR change *)
-(* went with a second frame of the same buffer, and the queue skipped that frame: *)
-(* the layer keeps the old filter until the guest draws again, which heals it. It *)
-(* needs a filter change during a trim and does nothing to the picture's content. *)
-StaleHowOnly == shown = last /\ how = lastHow
-
-Promise == AtRest => (shown = guest /\ (shownHow = how \/ StaleHowOnly))
+Promise == AtRest => shown = guest
 
 (* Every use QEMU counts belongs to a frame that holds it, and none goes below 0. *)
-Count(s, b) == Cardinality({i \in 1..Len(s) : s[i].buf = b})
 UseHeld == \A b \in Bufs :
     use[b] = Count(inflight, b) + Count(queue, b) + (IF pend.buf = b THEN 1 ELSE 0)
 
