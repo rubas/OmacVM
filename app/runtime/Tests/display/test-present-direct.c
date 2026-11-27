@@ -10,8 +10,9 @@
  * use. After a tick, the direct present sends the guest's buffer again only
  * when nothing uses it (IOSurfaceGetUseCount in cocoa_gl_present), so a skipped
  * direct frame must leave its buffer's use at 0. A drawn whole frame that is
- * skipped with nothing queued after it still waits in present_pend: the next
- * tile frame lies over it. No QEMU, no GL, no display.
+ * skipped with nothing queued after it waits in present_pend: the next tile
+ * frame lies over it (test-present-skip.sh tests the rest of its way). No QEMU,
+ * no GL, no display.
  *
  *   cc -DHAVE_DIRECT=0|1 -IDIR test-present-direct.c -o t && ./t
  *   DIR holds omacvm-present-tiles.h and present-frames.inc; HAVE_DIRECT=0 for
@@ -102,16 +103,13 @@ int main(void)
     present_frame_put(&t);
     check("tiles on: ... which gives it back once shown", free_again(&drawn));
 
-    /* Without the tiled present every skipped frame just goes. */
+    /* Without the tiled present too. */
     present_tiles_on = 0;
     guest = (struct Surface){ 0 };
-    drawn = (struct Surface){ 0 };
     f = frame(&guest, true);
-    w = frame(&drawn, false);
     present_frame_skip(&f, NULL);
-    present_frame_skip(&w, NULL);
-    check("tiles off: skipped frames give their surfaces back",
-          free_again(&guest) && free_again(&drawn) && pend_empty());
+    check("tiles off: a direct frame skipped gives the guest's buffer back",
+          !present_tiles_on && free_again(&guest) && pend_empty());
 
     printf("%s\n", fails ? "test-present-direct: FAIL" : "test-present-direct: all ok");
     return fails != 0;

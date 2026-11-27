@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - app/runtime/patches/omacvm-cocoa-present-direct.patch
+      - app/runtime/patches/omacvm-cocoa-present-skipped-last.patch
       - app/runtime/patches/omacvm-cocoa-present-tiles.patch
       - app/runtime/patches/qemu-cocoa-gl-present-vsync.patch
       - app/runtime/patches/qemu-cocoa-gl-present-trim.patch
@@ -15,6 +16,7 @@ on:
     branches: [main]
     paths:
       - app/runtime/patches/omacvm-cocoa-present-direct.patch
+      - app/runtime/patches/omacvm-cocoa-present-skipped-last.patch
       - app/runtime/patches/omacvm-cocoa-present-tiles.patch
       - app/runtime/patches/qemu-cocoa-gl-present-vsync.patch
       - app/runtime/patches/qemu-cocoa-gl-present-trim.patch

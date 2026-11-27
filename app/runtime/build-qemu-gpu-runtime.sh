@@ -1307,6 +1307,14 @@ patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-present-depth
 patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-hdr-follow.patch"
 "$native_dir/Tests/display/test-hdr-follow.sh" "$source_dir/ui/cocoa.m" || \
   die "ui/cocoa.m: the depth hold or HDR only in full screen is not wired as tested (test-hdr-follow.sh)"
+# OmacVM: a drawn frame that a tick of the vsync queue skips with none queued after it (a trim)
+# goes on the layer at the next tick, unless a newer frame took it over: a scroll that a trim
+# cuts off ends on screen too. The queue test fails on the code before, then passes.
+"$native_dir/Tests/display/test-present-skip.sh" --self-test "$source_dir/ui/cocoa.m" || \
+  die "ui/cocoa.m: the queue test passes without the patch (test-present-skip.sh)"
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-present-skipped-last.patch"
+"$native_dir/Tests/display/test-present-skip.sh" "$source_dir/ui/cocoa.m" || \
+  die "ui/cocoa.m: a frame skipped last does not go on the layer as tested (test-present-skip.sh)"
 # OmacVM: direct present: the guest's scanout IOSurface (virgl-scanout-iosurface.patch) as the
 # layer's contents, without the present's draw. A skipped frame of the guest's buffer gives it
 # back at once, also with the tiled present on, so the present after the tick sends it again.
