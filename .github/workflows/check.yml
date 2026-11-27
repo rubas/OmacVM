@@ -27,8 +27,8 @@ concurrency:
 
 jobs:
   check:
-    # This fork (rubas/OmacVM) has no Mac mini: it runs this job only by hand.
-    if: github.repository != 'rubas/OmacVM' || github.event_name == 'workflow_dispatch'
+    # This fork (rubas/omacvm) has no Mac mini: it runs this job only by hand.
+    if: github.repository != 'rubas/omacvm' || github.event_name == 'workflow_dispatch'
     # A fork's pull request has another head repository (or none, once the fork
     # is deleted): false, so macos-15. fromJSON gives the runner's label list.
     runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","omacvm-mini"]') || 'macos-15' }}
@@ -648,6 +648,10 @@ jobs:
           app/runtime/Tests/display/test-present-tiles.sh --self-test
       - name: Tiled present also when frames are shown when drawn (hidden test windows; the checks catch code without it)
         run: app/runtime/Tests/display/test-present-tiles-direct.sh --self-test
+      - name: A drawn frame that the vsync queue skips last goes on the layer at the next tick (the queue test catches code without it)
+        run: app/runtime/Tests/display/test-present-skip.sh --self-test
+      - name: The direct present gives a skipped frame of the guest's buffer back, also with tiles (the skip test catches code without it)
+        run: app/runtime/Tests/display/test-present-direct.sh --self-test
 
       - name: Extra brightness's gain, shader and omacvm check line (ADR 0050; the checks catch code without it)
         run: |
@@ -807,7 +811,7 @@ jobs:
   # changed) is built once per Mac. Forks and a manual run (macos-15, no cache)
   # skip this job.
   app:
-    if: github.repository != 'rubas/OmacVM' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.repository != 'rubas/omacvm' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","omacvm-mini"]') || 'macos-15' }}
     # A cache hit takes a few minutes; a runtime built from source up to ~30.
     timeout-minutes: 45

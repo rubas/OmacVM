@@ -1326,6 +1326,23 @@ patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-virtio-multitouch-t
 patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-touch.patch"
 "$native_dir/Tests/touch/test-touch.sh" "$source_dir/ui/cocoa.m" "$source_dir/hw/input/virtio-input-hid.c" || \
   die "ui/cocoa.m: touch on a touch display is not wired as tested (test-touch.sh)"
+# OmacVM: a drawn frame that a tick of the vsync queue skips with none queued after it (a trim)
+# goes on the layer at the next tick, unless a newer frame took it over: a scroll that a trim
+# cuts off ends on screen too. The queue test fails on the code before, then passes.
+"$native_dir/Tests/display/test-present-skip.sh" --self-test "$source_dir/ui/cocoa.m" || \
+  die "ui/cocoa.m: the queue test passes without the patch (test-present-skip.sh)"
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-present-skipped-last.patch"
+"$native_dir/Tests/display/test-present-skip.sh" "$source_dir/ui/cocoa.m" || \
+  die "ui/cocoa.m: a frame skipped last does not go on the layer as tested (test-present-skip.sh)"
+# OmacVM: direct present: the guest's scanout IOSurface (virgl-scanout-iosurface.patch) as the
+# layer's contents, without the present's draw. A skipped frame of the guest's buffer gives it
+# back at once, also with the tiled present on, so the present after the tick sends it again.
+# The skip test and the wiring fail on the code before, then pass.
+"$native_dir/Tests/display/test-present-direct.sh" --self-test "$source_dir/ui/cocoa.m" || \
+  die "ui/cocoa.m: a direct present check passes without the patch (test-present-direct.sh)"
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-present-direct.patch"
+"$native_dir/Tests/display/test-present-direct.sh" "$source_dir/ui/cocoa.m" || \
+  die "ui/cocoa.m: a skipped frame of the guest's buffer does not go back as tested (test-present-direct.sh)"
 # OmacVM: no App Nap while the VM runs: with its window out of sight (screen
 # locked, another Space) macOS slowed the whole VM to a few percent, and on
 # macOS 27 clamped it to Utility QoS despite the activity.
@@ -1985,6 +2002,9 @@ if grep -rnE --include='*.[ch]' --exclude=vkr_allocator.c --exclude-dir=venus-pr
      "$virgl_source/src/venus"; then
   die "src/venus: a proc table entry tested against NULL; entries are never NULL, use VKR_MISSING (missing-entries patch)"
 fi
+# OmacVM: 8-bit and 10-bit scanout buffers as IOSurfaces, for QEMU's direct present
+# (omacvm-cocoa-present-direct.patch).
+patch -d "$virgl_source" -p1 -f -i "$native_dir/patches/virgl-scanout-iosurface.patch"
 # SPIRV-Tools' validator for Venus (virgl-venus-spirv-validate.patch): a static library with
 # hidden symbols, so libvirglrenderer exports none of them (MoltenVK carries a private copy of
 # its own), spirv-tools-*.patch applied; once more with AddressSanitizer for the CPU test.

@@ -1073,6 +1073,12 @@ The less obvious ones, with causes and where the fix lives, are in
   Pilot test settles on the drawn screen (`#body`), not on the state a worker
   thread set before the app's loop redraws; a time the code logged is compared
   with the event's own time, never with the clock at the check (a minute on).
+- `app/runtime/model/Present.tla` (TLA+; `app/runtime/model/check.sh`, CI `.github/workflows/model.yml`)
+  models the window's direct present: cocoa_gl_present's same-buffer rule, the
+  vsync queue's skips, `present_pend` and `present_bh`. A PR that changes them
+  in the patches its header names updates the model and its "Last matched"
+  line. Walk each counterexample through the code before you change the model,
+  and never shrink its bounds or weaken its invariants to make it pass.
 - Verify on real VMs before committing behaviour changes: `omacvm apply` against a
   test VM, `omacvm build --vm-name "OmacVM Test"` for the full path,
   then `omacvm check --vm <name>` must pass.
