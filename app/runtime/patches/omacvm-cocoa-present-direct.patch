@@ -12,10 +12,6 @@ nothing written, is not sent again (a write moves it to another IOSurface): the
 guest flushes most buffers twice. A frame of the guest's buffer that the queue skips
 (a trim, a drop) gives the buffer back at once, also with the tiled present on, where
 a skipped frame waits for the next one: the present after the tick sends it again.
-A drawn frame that a tick skips with none queued after it (a trim) waits in
-present_pend, also with the tiled present off, until a newer frame takes it over or
-the next tick shows it (the link keeps ticking for it): a scroll that ends on a
-trimmed frame ends on screen too.
 Drawn instead, from the IOSurface as a RECTANGLE texture: a frame of extra
 brightness (the brightness shader reading a RECTANGLE texture). Such a frame waits
 for the guest's writes on the GPU and keeps the IOSurface in use until its draw is
@@ -35,10 +31,9 @@ Why: the present's draw cost 0.60 ms of GPU a frame at 5120x2880.
 Upstream: not sent (OmacVM's IOSurface present).
 Tests: VM A/B and the frame check in docs/experiments/display-path.md;
 app/runtime/Tests/display/test-present-direct.sh (a skipped frame of the guest's
-buffer goes back with the tiled present on; the queue's trims at the end of a scroll
-of drawn frames, with the tiled present on and off: the next tick shows the last).
-Applies before omacvm-cocoa-no-app-nap.patch (the last cocoa patch), with
-virgl-scanout-iosurface.patch.
+buffer goes back with the tiled present on, a drawn one waits in present_pend).
+Applies after omacvm-cocoa-present-skipped-last.patch and before
+omacvm-cocoa-no-app-nap.patch (the last cocoa patch), with virgl-scanout-iosurface.patch.
 diff --git a/hw/display/virtio-gpu-virgl.c b/hw/display/virtio-gpu-virgl.c
 index de2019d..4d44af4 100644
 --- a/hw/display/virtio-gpu-virgl.c
@@ -103,7 +98,7 @@ index 6919ece..bf61982 100644
  
  typedef struct ScanoutTexture {
 diff --git a/ui/cocoa.m b/ui/cocoa.m
-index c5aa25a..6020681 100644
+index 12f1617..6020681 100644
 --- a/ui/cocoa.m
 +++ b/ui/cocoa.m
 @@ -314,6 +314,13 @@ static void cocoa_gl_switch(DisplayChangeListener *dcl,
@@ -960,17 +955,11 @@ index c5aa25a..6020681 100644
      return true;
  }
  
-@@ -10704,14 +11233,18 @@ static void present_frame_absorb(PresentFrame *newer, PresentFrame *older)
- }
- 
- /*
-- * present_lock held: OLDER is skipped. With the tiled present its updates
-- * go into NEXT (the frame after it), or, when none is queued yet, wait in
-- * present_pend for the next frame that comes. Else it just goes.
-+ * present_lock held: OLDER is skipped. Its updates go into NEXT (the frame
-+ * after it; a whole one lets OLDER go), or, when none is queued yet, OLDER
-+ * waits in present_pend: the next frame that comes takes it over (a tile
-+ * frame may lie over it), or else the next tick shows it, as it is the
+@@ -10708,12 +11237,16 @@ static void present_frame_absorb(PresentFrame *newer, PresentFrame *older)
+  * after it; a whole one lets OLDER go), or, when none is queued yet, OLDER
+  * waits in present_pend: the next frame that comes takes it over (a tile
+  * frame may lie over it), or else the next tick shows it, as it is the
+- * guest's newest.
 + * guest's newest. A direct frame always just goes: no tile frame lies over
 + * it (the frame drawn after it is whole), and the present after the tick
 + * sends the guest's buffer again, which it does only when nothing holds it.
@@ -978,11 +967,13 @@ index c5aa25a..6020681 100644
  static PresentFrame present_pend;
  static void present_frame_skip(PresentFrame *older, PresentFrame *next)
  {
--    if (present_tiles_on <= 0) {
+-    if (next) {
 +    if (older->direct) {
-         present_frame_put(older);
-     } else if (next) {
++        present_frame_put(older);
++    } else if (next) {
          present_frame_absorb(next, older);
+     } else {
+         present_frame_absorb(older, &present_pend);
 @@ -10903,6 +11436,7 @@ static void present_frame_show(PresentFrame *f)
          cocoa_gl_present_show_tiles(f);
      } else if (f->surf) {
@@ -991,31 +982,7 @@ index c5aa25a..6020681 100644
      }
  }
  
-@@ -11168,6 +11702,11 @@ static bool cocoa_gl_present_vsync(double T)
-     }
-     present_sync.win_ticks++;
-     present_sync.ticks++;
-+    /* OmacVM: a frame skipped at the last tick that no newer one took over: it goes now. */
-+    if (!present_sync.queued && (present_pend.surf || present_pend.pt)) {
-+        present_sync.queue[present_sync.queued++] = present_pend;
-+        present_pend = (PresentFrame){ 0 };
-+    }
-     if (present_sync.queued) {
-         /*
-          * Input is coming: frames that wait behind a newer one are old news
-@@ -11261,8 +11800,9 @@ static bool cocoa_gl_present_vsync(double T)
-         present_sync.merge =
-             present_sync.win_flushes > present_sync.win_ticks * 5 / 4;
-         if (!present_fixed && present_sync.win_gap2 >= PRESENT_CLOSE_S &&
--            !present_sync.queued && !present_sync.inflight) {
--            /* Frames came one at a time for a second: no link. */
-+            !present_sync.queued && !present_sync.inflight &&
-+            !present_pend.surf && !present_pend.pt) {
-+            /* Frames came one at a time for a second: no link, once no frame waits for a tick. */
-             present_sync.linked = false;
-             present_sync.close_frames = 0;
-             present_sync.merge = false;
-@@ -12543,10 +13083,16 @@ static void omacvm_head_render(OmacVMHead *hd, NSSize size)
+@@ -12549,10 +13083,16 @@ static void omacvm_head_render(OmacVMHead *hd, NSSize size)
      if (hd->borrow) {
          DisplayGLTexture texture = hd->borrow(hd->scanout_id);
  
