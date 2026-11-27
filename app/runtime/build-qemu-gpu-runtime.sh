@@ -1305,8 +1305,27 @@ patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-hdr-follow-lo
   die "ui/cocoa.m: an HDR-follow wiring check passes without the patches (test-hdr-follow.sh)"
 patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-present-depth-hold.patch"
 patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-hdr-follow.patch"
+# A new scanout depth's first frame is not drawn (Hyprland attaches an
+# undrawn buffer to its format change): held until the guest's next frame.
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-present-depth-first.patch"
 "$native_dir/Tests/display/test-hdr-follow.sh" "$source_dir/ui/cocoa.m" || \
-  die "ui/cocoa.m: the depth hold or HDR only in full screen is not wired as tested (test-hdr-follow.sh)"
+  die "ui/cocoa.m: the depth hold, the first-frame hold or HDR only in full screen is not wired as tested (test-hdr-follow.sh)"
+# OmacVM: touch on a touch display (#843): one recognizer per window takes
+# every direct touch at touch-down (AppKit's mouse emulation made a scroll a
+# drag, and taps misfired), the rules decide taps, scrolling, hold-drags and
+# right clicks; a pinch's two fingers go to the guest's touch screen
+# (virtio-multitouch, a touch screen only: no mouse's buttons, which took the
+# tablet's clicks). Its rules' test, a check that the wiring checks fail on
+# the code before, the wiring. Before no-app-nap.
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-touch-logic.patch"
+"$native_dir/Tests/touch/test-touch.sh" || \
+  die "touch on a touch display fails its test (test-touch.sh)"
+"$native_dir/Tests/touch/test-touch.sh" --self-test "$source_dir/ui/cocoa.m" "$source_dir/hw/input/virtio-input-hid.c" || \
+  die "ui/cocoa.m: a touch wiring check passes without the patch (test-touch.sh)"
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-virtio-multitouch-touch-only.patch"
+patch -d "$source_dir" -p1 -f -i "$native_dir/patches/omacvm-cocoa-touch.patch"
+"$native_dir/Tests/touch/test-touch.sh" "$source_dir/ui/cocoa.m" "$source_dir/hw/input/virtio-input-hid.c" || \
+  die "ui/cocoa.m: touch on a touch display is not wired as tested (test-touch.sh)"
 # OmacVM: a drawn frame that a tick of the vsync queue skips with none queued after it (a trim)
 # goes on the layer at the next tick, unless a newer frame took it over: a scroll that a trim
 # cuts off ends on screen too. The queue test fails on the code before, then passes.
@@ -1953,6 +1972,12 @@ patch -d "$virgl_source" -p1 -f -i "$native_dir/patches/virgl-venus-map-alignmen
 [[ $(grep -c 'minMemoryMapAlignment > VKR_GUEST_MAP_ALIGNMENT' "$virgl_source/src/venus/vkr_physical_device.c") == 2 ]] && \
   grep -qx '#define VKR_GUEST_MAP_ALIGNMENT 4096' "$virgl_source/src/venus/vkr_physical_device.c" || \
   die "vkr_physical_device.c: the guest is told the host driver's minMemoryMapAlignment (map-alignment patch)"
+# A linear image with INPUT_ATTACHMENT is refused also under EXTENDED_USAGE, where KosmicKrisp's
+# own query says yes and Metal then ends QEMU at the bind (Mesa 26.3's Zink on X11).
+patch -d "$virgl_source" -p1 -f -i "$native_dir/patches/virgl-venus-linear-input-attachment.patch"
+[[ $(grep -c 'vkr_physical_device_linear_input_ok(' "$virgl_source/src/venus/vkr_physical_device.c") == 3 ]] && \
+  grep -q 'if (!vkr_physical_device_linear_input_ok(physical_dev, info->format, info->tiling,' "$virgl_source/src/venus/vkr_image.c" || \
+  die "vkr: a linear image with INPUT_ATTACHMENT is not refused (linear-input-attachment patch)"
 # A device the Mac's driver lost holds new Venus devices back for a while, so a VM app that is
 # started again and again after a lost device does not go straight back to the driver. Its
 # rules on their own first; made against the fully patched tree, so it comes last.
@@ -1961,6 +1986,14 @@ patch -d "$virgl_source" -p1 -f -i "$native_dir/patches/virgl-venus-device-lost-
 grep -q 'if (!vkr_device_restart_ok(ctx)) {' "$virgl_source/src/venus/vkr_device.c" && \
   [[ $(grep -c 'vkr_device_note_lost(' "$virgl_source/src/venus/vkr_queue.c") == 8 ]] || \
   die "vkr_device.c, vkr_queue.c: lost devices do not hold new ones back (device-lost-backoff patch)"
+# The tap set capset bit 19 for its own CORE_PROFILE_ONLY; upstream's bit 19 is
+# QUERY_FORMAT_MODIFIER (GBM only), and Mesa 26.3 then sent GET_PIPE_RESOURCE_LAYOUT for every
+# shared texture, which this build refuses: every desktop GL context was lost. After the
+# context-loss patch, whose context holds the define.
+patch -d "$virgl_source" -p1 -f -i "$native_dir/patches/virgl-caps-format-modifier-bit.patch"
+! grep -q 'VIRGL_CAP_V2_CORE_PROFILE_ONLY' "$virgl_source/src/virgl_hw.h" "$virgl_source/src/vrend/vrend_renderer.c" && \
+  ! grep -q 'QUERY_FORMAT_MODIFIER;' "$virgl_source/src/vrend/vrend_renderer.c" || \
+  die "vrend_renderer.c: the guest is still told capset bit 19 (caps-format-modifier-bit patch)"
 # entries are never NULL: VKR_MISSING tells a stub. Checked on the fully patched tree, after the
 # last Venus patch (vkr_allocator.c keeps tables of its own, venus-protocol's loader fallbacks run
 # before the stubs).

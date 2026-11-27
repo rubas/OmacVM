@@ -54,6 +54,14 @@ wiring() {
     'qatomic_set(&present_tiles_full, true);'
   chk "the guest's buffer is sent again when nothing uses it and the layer does not show it" has "$present" \
     '(gsurf == qatomic_read(&present_shown) || IOSurfaceGetUseCount(gsurf)) ?'
+  chk "the first-frame depth hold runs before the direct present" order "$present" \
+    'int first = omacvm_hf_first(' 'if (gsurf) {'
+  chk "the first-frame depth hold compares against direct frames' depth" has "$present" \
+    'present_direct_have_depth'
+  chk "direct present records its frame's depth" has "$direct" \
+    'present_direct_deep = deep;'
+  chk "a drawn frame clears direct depth tracking" has "$present" \
+    'present_direct_have_depth = false;'
   chk "(kept) the present after a tick runs for a whole frame" order "$bh" 'if (qatomic_read(&present_tiles_full)) {' 'gl_dirty = true;'
   chk "(kept) a shown frame schedules the present after the tick" order "$vsync" 'present_frame_show(&show);' 'qemu_bh_schedule(present_bh);'
   trims=$(grep -cF 'present_frame_skip(&present_sync.queue[0], present_sync.queued > 1 ?' <<<"$vsync")

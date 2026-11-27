@@ -37,6 +37,81 @@ in more words.
   l and press Enter. This uses the same Control Center access as AirPlay, so the same Accessibility
   permission and one-second keyboard pause apply. It needs the app update and Update VM.
 
+## 3.6.0
+
+The Mac's own pointer on Omarchy, Mac key layouts for new VMs, dragging icons in the notch strip,
+and two new switches for Macs that have the hardware: the Apple logo's light and touch displays.
+All need the app update; the guest parts come with Update VM.
+
+- **The Mac's own cursor as the VM's pointer** (#821, by @rubas; hidden, off: `defaults write
+  org.omacvm.app macPointer -bool true`). With it on, Update VM builds Omarchy's aquamarine with a
+  patch that sends the pointer's hotspot (Omarchy's recipe, pinned by commit and checksum), and the
+  pointer moves exactly as the Mac's cursor does. A system update never breaks the desktop: the VM
+  runs Omarchy's own library until the next Update VM, and nothing is built once Omarchy's own
+  aquamarine has the fix. `omacvm check` has a "Mac pointer" line.
+- **Mac key layouts** (#784, reported by @epicoun): a new VM on a German, Swiss, French, British,
+  Italian, Dutch, Portuguese, Swedish, Danish, Finnish or Icelandic Mac types with the Mac's own
+  layout (Option-L for @ on German). The left Option key stays Alt for Omarchy's shortcuts.
+  Existing VMs type as before; the new "Mac key layout" row under Input switches them at the next
+  Update VM.
+- **Omanotch: drag icons along the strip** (#849, reported by @dandomin): on Omarchy 4.5, hold an
+  icon in the strip beside the notch and drag it to reorder it, as on the bar itself.
+- **The Apple logo's light** (#844, #845, by @rubas): on a MacBook Pro with a lit Apple logo,
+  `omacvm-logo` in the VM sets it to macOS's own (`auto`), `off`, steady (`on 1-100`) or breathing
+  (`breathe 6-30` a minute). Dark while the display sleeps, macOS's again once no VM runs. Off by
+  default; the switch under Display shows only on a Mac with the lit logo.
+- **Touch display (experimental)** (#847, by @mlamoure): on a Mac with a touch display, a switch
+  under Input passes it to the VM: tap to click, move to scroll, hold and move to drag, hold and
+  lift for a right click, pinch to zoom in apps that know touch screens. Off by default; shown only
+  on a Mac with a touch display. Not tested on a touch display by us yet.
+
+## 3.5.2
+
+A desktop fix for Omarchy 4.0 VMs after their next system update, no flash at the HDR switch,
+brightness that stays put after sleep, a login fix for new VMs, and gesture fixes for the newest
+MacBook Pros.
+
+- **Omarchy 4.0 VMs keep their desktop after a system update that brings Mesa 26.3** (#857, #858).
+  Mesa 26.3 asks the Mac for the memory layout of shared images, but only when the Mac says it can
+  give one. OmacVM said so by mistake and then refused the question, so the desktop's GPU contexts
+  were lost at every start and the screen stayed black. OmacVM no longer says so. Forcing Zink on
+  X11 under Mesa 26.3 could also stop the VM; that app now gets an error and the VM keeps running.
+  Needs the app update.
+- **HDR only in full screen: no flash at the switch.** When the VM's display switched between SDR
+  and HDR (leaving or entering full screen), one black frame showed: Hyprland's first frame after
+  the switch was not drawn yet. OmacVM now keeps the last picture until the VM's next frame (at
+  most 200 ms). Needs the app update.
+- **Brightness after sleep**: after the Mac or its display woke, the brightness could run to full
+  bright or full dark, and the brightness keys seemed stuck until it was set in macOS. OmacVM Bridge
+  repeated a held brightness key until the key's release came, and a release lost around a wake
+  let it run through the whole range. A held key now repeats only while the keyboard still reads it
+  down; sleep, wake and the lock screen end any held key; a key on a sleeping display is left to
+  macOS. Needs the app update.
+- **Login on a new VM** (#837, reported by @xa4): a VM made with "Build it yourself" had no saved
+  user for the login screen, and Omarchy's login screen has no user name field, so no password
+  worked with autologin off. Setting up the VM now saves its user when none is saved; an existing
+  VM gets it at its next Update VM, and `omacvm check` warns while it is missing.
+- **Omanotch: no window stays on the hidden NOTCH output** (#848, reported by @dandomin): windows
+  on a numbered workspace that landed on the notch output stayed there, out of sight. They now go
+  back to the built-in display, whatever the workspace is called.
+- **Gestures on the M5 MacBook Pro** (#838 and #839 by @mlamoure): its trackpad reports most
+  fingers in contact with no pressure, so four-finger swipes did nothing. A finger in contact now
+  counts whatever its pressure.
+- **Gestures: swiping on into the VM** (#841 and #842 by @mlamoure): a swipe from macOS's desktops
+  on into the VM's workspaces now carries on instead of bouncing until the fingers rest.
+- **Gestures: no late step after a swipe out** (#840 by @mlamoure): when you swiped again right
+  after a swipe out to macOS, the helper could move you a second time the wrong way.
+- **Gestures: the touch display is not a trackpad** (#846 by @mlamoure, part of #843): on a MacBook
+  Pro with the touch display, the helper no longer takes the display for a second trackpad.
+- **Scroll momentum: Chrome scrolls as far as macOS again** (#851 by @rubas). Chromium's field trial
+  config, which Chrome for Testing applies, turns on `WaylandUnscaledTouchpadScrolling`, and a
+  two-finger scroll then moved the page a fifth of what macOS moves it. Scroll momentum now turns
+  that feature off in the flags files where it puts `--disable-smooth-scrolling` (restart Chromium
+  once). T3 Code, an Electron app, gets the scroll factor of the other Chromium-based apps: it
+  scrolled 3.7 times as far as macOS.
+- **Omanotch check** (#850 by @rubas): when the bar copy's folder has no `Bar.qml`, `omacvm check`
+  says the copy is missing instead of "back".
+
 ## 3.5.1
 
 Fixes for the Bridge next to Karabiner-Elements and for llama.cpp with Vulkan, and a clearer

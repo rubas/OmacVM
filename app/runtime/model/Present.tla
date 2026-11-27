@@ -32,10 +32,13 @@
 (* the layer is the "shown" half of the same-buffer rule. An unlinked show *)
 (* may happen whenever the queue is empty (more than the code does).       *)
 (* Not covered: a second output's window reading the same buffer (its use  *)
-(* count), and the layer updates that the tick and an unlinked show make   *)
-(* after present_lock: both actions here show under the lock.              *)
+(* count), the first-frame depth hold (omacvm-cocoa-present-depth-first    *)
+(* runs before direct present, keeps gl_dirty, and releases on the next    *)
+(* flush or within 200 ms), and the layer updates that the tick and an     *)
+(* unlinked show make after present_lock: both actions here show under the *)
+(* lock.                                                                   *)
 (*                                                                         *)
-(* Last matched these patches at #51.                                      *)
+(* Last matched these patches at #35.                                      *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 

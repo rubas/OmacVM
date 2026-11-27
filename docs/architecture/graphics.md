@@ -487,6 +487,7 @@ one patch each, each with a build-time test that compiles or runs on the Mac's G
 | no cull distances: vrend wrote no clip distances (a shader writing gl_ClipDistance refused, user clip planes and the clip distances of tessellation and geometry shaders ignored), and a last tessellation evaluation shader lost its y prescale (upside down in a window) and its transform feedback (#589) | `virgl-shader-clip-distances.patch` (clip distances on every desktop GL; the user clip planes' stores in a variant for planes on: key bit `ucp_enabled` for the last vertex or evaluation shader, `gs.emit_clip_distance` for the geometry shader; a vertex shader still never declares gl_CullDistance; transform feedback from a last evaluation shader runs on Apple's software vertex path: "Fallback to SW vertex processing for EVAL_PROG TF" once in qemu.log) | `test-whole-program-shapes.c` |
 | `GL_ARB_arrays_of_arrays` asked for by a geometry or tessellation shader with a varying array, without checking the host (#589) | `virgl-shader-arrays-of-arrays.patch` (only where the GL has it; interface blocks otherwise, as vrend already declared them) | `test-whole-program-shapes.c` |
 | guest told 0 tessellation shader outputs (asked only on a GL with atomic counters): the guest's Mesa refused every whole program whose tessellation shader had an output (#589) | `virgl-caps-tess-outputs.patch` (the per-vertex limits, on every GL with tessellation) | `test-whole-program-shapes.c` |
+| guest told capset bit 19 (the tap's CORE_PROFILE_ONLY, upstream's QUERY_FORMAT_MODIFIER since Mesa 26.3): Mesa 26.3 sent GET_PIPE_RESOURCE_LAYOUT for every shared texture, refused without GBM, and the desktop's GL contexts were lost at every start | `virgl-caps-format-modifier-bit.patch` (bit 19 not set; upstream sets it only with GBM and Venus interop) | `test-caps-format-modifier.c`, fuzz seed `seed-mesa263-layout` |
 | clip distances between tessellation shaders (`gl_ClipDistance` in the control shader's `gl_out[]` or the evaluation shader's `gl_in[]`, also from a vertex shader straight into an evaluation shader with no control shader): Apple's Metal pipeline build failed ("Fallback to SW vertex processing because buildPipelineState failed"), the draws ran on its CPU vertex path and its shader compiler crashed; Apple's software renderer has no such failure (#589) | `virgl-shader-tess-clip-varyings.patch` (plain per-vertex varyings `omacvm_clip0[]`/`omacvm_clip1[]` without a location, named in the control shader's variable info and the evaluation shader's key; gl_PerVertex as before with cull distances or no free varying slot); `virgl-shader-vs-tes-clip-varyings.patch` (the same from a vertex shader with no control shader: `omacvm_clip0`/`omacvm_clip1`, the evaluation shader's key from the vertex shader) | `test-core-glsl-shaders.c` (text), `test-whole-program-shapes.c` |
 | a temp indexed at run time without an ARRAY declaration (`TEMP[ADDR[0].x+18]`; the VM's Mesa sends clip distances written in a loop that way, virgl_tgsi.c): vrend wrote `temp18[i].x` on a plain `vec4`, "Swizzle of non-vector primitive float", the shader was refused and its draws skipped; an indexed read gave one component in all four (#589). | `virgl-shader-indirect-temps.patch` (the declaration from its lowest indexed register on is one array; other temps and shaders without indexed temps unchanged; indexed writes use their own address register) | `test-core-glsl-shaders.c` (text, compile), `test-whole-program-shapes.c` (L rows) |
 | in that looped form the VM's Mesa copies only the first temp (distances 0..3) back to the output, `MOV OUT[1], TEMP[18]`, so 4..7 were undefined: a negative distance 5 did not clip on the M4, the M1 Max dropped the draw (#692; virgl_tgsi.c, the same in Mesa 26.2.6 and main) | `virgl-shader-clip-copyback.patch` (after that copy, from a temp indexed at run time, the GLSL also sets `clip_dist_temp[1]` from the next temp, while the shader never writes the second clip distance register itself; the same copy as the guest Mesa patch `src/app/guest/mesa/mesa-virgl-tgsi-clip-copyback.patch`, #694, which no VM gets) | `test-core-glsl-shaders.c` (text, compile; no copy for 1-4 distances or a shader that writes OUT[2]) |
@@ -623,6 +624,13 @@ Patches (all in `app/runtime/patches`, one per concern):
   memory) and leaves out COLOR_ATTACHMENT only where optimal tiling renders.
   `Tests/virgl/test-venus-image-limits.c` runs 101 cases through vkr's dispatch
   on the staged drivers at every runtime build.
+- `virgl-venus-linear-input-attachment.patch`: a LINEAR image with
+  INPUT_ATTACHMENT is refused (create, device image queries, both format
+  queries) unless the format's linear tiling has an attachment feature, also
+  under `VK_IMAGE_CREATE_EXTENDED_USAGE_BIT`, where KosmicKrisp's own query checks
+  no usage and says yes. Mesa 26.3's Zink asks that way for X11 windows (through
+  Xwayland), and Metal ended QEMU at the bind. Cases `zink-extended*` and
+  `linear-extended` in `test-venus-image-limits.c`.
 - `virgl-venus-missing-entries.patch`, `virgl-venus-guest-asserts.patch`,
   `virgl-venus-buffer-binds.patch` (ADR 0065's amendment, 3.2.15): what still
   ended QEMU in vkr itself (section 10). Proc table entries are never NULL: a
@@ -1187,7 +1195,10 @@ bench lock and are indications only):
   frame into surfaces of the other colour: in the surfaces' hold-off such a
   frame is held until the right ones are made (also without the switch, with
   HDR). While SDR the guest is told the PQ headroom it had (or the display's
-  most), not the ~1 the panel falls to without EDR.
+  most), not the ~1 the panel falls to without EDR. Hyprland's format change
+  scans out a buffer it has not drawn yet and draws into it one frame later,
+  so a new depth's first frame is held until the guest's next one (at most
+  200 ms; `omacvm-cocoa-present-depth-first.patch`, ADR 0074's addendum).
 - **HDR clients**: an app must hand Hyprland a PQ image description
   (`wp_color_manager_v1`). GStreamer's `waylandsink` does; mpv 0.41 with
   `--gpu-api=opengl` does not (mpv's master does, with `vo=gpu-next`; app
@@ -1370,10 +1381,10 @@ window on the same display (`nativelat.swift`), the floor macOS itself sets.
   move waits for a whole guest frame and its present (about 25 ms at 60 Hz;
   the Mac's own cursor is not in a frame at all). The Mac pointer setting
   (`omacvm-cocoa-hw-cursor.patch`, hidden, off) makes the guest's cursor
-  plane image the Mac's cursor; Hyprland 0.56.2 does not use the cursor
-  plane on virtio-gpu yet (Linux hides a virtual GPU's cursor plane from
-  atomic clients without DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT, and
-  aquamarine does not ask for it), so it waits for the guest side.
+  plane image the Mac's cursor. Linux hides a virtual GPU's cursor plane
+  from atomic clients without DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT, and
+  Omarchy's aquamarine does not ask for it, so a start with the setting
+  runs OmacVM's build of that aquamarine with cursor hotspots (ADR 0075).
 - The pointer on its own layer (`pointerPlane`, experimental, ADR 0054):
   OmacVM's virtio-gpu build shows the cursor plane anyway (module option
   `cursor_plane=1` clears `DRIVER_CURSOR_HOTSPOT`; every output keeps its
@@ -1388,8 +1399,9 @@ window on the same display (`nativelat.swift`), the floor macOS itself sets.
   nothing in the guest; Hyprland still commits a frame per move (aquamarine's
   atomic `moveCursor` schedules one), so QEMU still presents the unchanged
   frame. Mini, 3024x1896@60, pointer circles 60/s: QEMU GPU 84-94 -> 23-38
-  ms/s. The Mac pointer setting still needs the hotspot (aquamarine with
-  hotspots, or its legacy path) and stays as it was. On an 8-bit start the
+  ms/s. The Mac pointer setting needs the hotspot, which this plane does
+  not get: it runs on the stock plane with OmacVM's aquamarine (ADR 0075),
+  never together with this option. On an 8-bit start the
   driver offers the stock formats (10-bit only with `deep_color=1`, HDR).
   With Extra brightness the layer's image gets the frames' gain (half
   floats, extended linear sRGB, EDR: `omacvm-cocoa-pointer-bright*.patch`).
@@ -1441,8 +1453,13 @@ At 120 Hz: key 15-18, keys while the pointer moves 22-24, pointer 14-16.
   MotionMark (median of 3: 39.6 vs 38.5 fps, 3007 vs 3016) and the key and
   pointer rows stayed the same, for 5-19 % more wake-ups. The doubled naps
   stay.
-- The Mac pointer setting (`macPointer`) still gives nothing: no cursor
-  command reaches QEMU with Hyprland 0.56.2 and aquamarine 0.15.1.
+- The Mac pointer setting (`macPointer`) takes the pointer out of this path:
+  with OmacVM's aquamarine (cursor hotspots, ADR 0075) the guest's image is
+  the Mac's own cursor, which macOS moves without the VM. The guest still
+  answers each move with a cursor command (1.2-2.0 ms after QEMU queued the
+  move, 95 % within 14 ms: a test VM on a Mac mini at background priority,
+  traces input_event_abs to virtio_gpu_update_cursor, the same with the
+  pointer layer), which then only says where the pointer hides or changes.
 
 ## 13. Merging the tracks
 
