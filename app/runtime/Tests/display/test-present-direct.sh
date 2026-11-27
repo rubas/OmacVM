@@ -1,9 +1,10 @@
 #!/bin/bash
-# A skipped frame of the guest's own IOSurface goes back at once (omacvm-cocoa-present-direct.patch):
-#   - test-present-direct.c runs the vsync queue's skip code, taken from a ui/cocoa.m, with the tiled
-#     present on and off: a direct frame skipped with none after it (the trims after a tick) leaves
-#     the guest's buffer unused, so the present after the tick sends it again; a drawn whole frame
-#     still waits in present_pend for the tile frame that lies over it;
+# What the vsync queue does with a frame it skips (omacvm-cocoa-present-direct.patch):
+#   - test-present-direct.c runs the vsync queue and its skip code, taken from a ui/cocoa.m, with the
+#     tiled present on and off: a direct frame skipped with none after it (the trims after a tick)
+#     leaves the guest's buffer unused, so the present after the tick sends it again; a drawn frame
+#     skipped with none after it waits in present_pend for the tile frame that lies over it, or else
+#     the next tick shows it (a scroll that ends on a trimmed frame ends on screen too);
 #   - with a patched ui/cocoa.m: the wiring of that resend;
 #   - with --self-test [<ui/cocoa.m without the patch>]: the skip test fails on that code and every
 #     wiring check not marked "(kept)" fails too (CI: the code before the patch, copied in
@@ -22,22 +23,30 @@ has() { grep -qF -- "$2" <<<"$1"; }
 # A before B (fixed strings), in that order in the text.
 order() { awk -v a="$2" -v b="$3" '!x && index($0, a) {x=NR; next} x && index($0, b) {y=NR; exit} END {exit !(x && y)}' <<<"$1"; }
 
-# present-frames.inc from a cocoa.m: PresentFrame and the skip code, in the file's order.
+# present-frames.inc from a cocoa.m, in the file's order: the queue's sizes and times, PresentFrame,
+# present_sync, the skip code, and the queue (a frame comes, a tick).
 extract() {
   local m=$1 h
-  awk '/^typedef struct PresentFrame \{$/ {on=1} on {print} on && /^\} PresentFrame;$/ {exit}' "$m" > "$work/present-frames.inc"
+  grep -E '^#define PRESENT_(QUEUE|IDLE_S|INPUT_NS|CLOSE_S) ' "$m" > "$work/present-frames.inc"
+  awk '/^typedef struct PresentFrame \{$/ {on=1} on {print} on && /^\} PresentFrame;$/ {exit}' "$m" >> "$work/present-frames.inc"
+  awk 'p == "static struct {" && /^    PresentFrame queue\[PRESENT_QUEUE\];/ {on=1; print p} {p=$0} on {print} on && /^};$/ {exit}' \
+    "$m" >> "$work/present-frames.inc"
   for h in 'static void present_frame_put(PresentFrame *f)' 'static void present_frame_absorb(PresentFrame *newer, PresentFrame *older)'; do
     body "$m" "$h" >> "$work/present-frames.inc"
   done
   grep -x 'static PresentFrame present_pend;' "$m" >> "$work/present-frames.inc"
-  body "$m" 'static void present_frame_skip(PresentFrame *older, PresentFrame *next)' >> "$work/present-frames.inc"
+  for h in 'static void present_frame_skip(PresentFrame *older, PresentFrame *next)' \
+           'static void present_window_reset(double now)' 'static void cocoa_gl_present_queue_frame(PresentFrame f)' \
+           'static double present_wanted_hz(void)' 'static bool cocoa_gl_present_vsync(double T'; do
+    body "$m" "$h" >> "$work/present-frames.inc"
+  done
 }
 # 1 when the extracted PresentFrame marks direct frames
 direct_field() { grep -qE '^ +bool direct;' "$work/present-frames.inc" && echo 1 || echo 0; }
 build() { # $1 = HAVE_DIRECT
   patch -s -d "$work" -p1 -f -i "$patches/omacvm-cocoa-present-tiles-logic.patch" || return 1
   cc -std=c11 -Wall -Wextra -Werror -Wno-unused-function -DHAVE_DIRECT="$1" -I"$work" -I"$work/ui" \
-    "$here/test-present-direct.c" -o "$work/t" 2>"$work/cc.log" || { cat "$work/cc.log" >&2; return 1; }
+    "$here/test-present-direct.c" -o "$work/t" -lm 2>"$work/cc.log" || { cat "$work/cc.log" >&2; return 1; }
 }
 
 wiring() {
