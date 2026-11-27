@@ -116,21 +116,11 @@ static void tick(void)
     clock_s += TICK_S / 2;
 }
 
-/*
- * A scroll in drawn frames (extra brightness, or a guest buffer that is no
- * IOSurface) with OMACVM_GL_TRIM=quarter: its first frames link the queue, then
- * a frame is left over after every tick until the quarter-second trim skips the
- * one left over, which is the scroll's newest. With MORE a newer frame comes
- * before the next tick. Returns the frames, LAST the one the trim skipped, and
- * SHOWN what the layer shows after that next tick.
- */
+/* The queue as QEMU starts it, with the tiled present on or off and the quarter-second trim. */
 #define SCROLL_MAX 64
 static struct Surface scroll_frames[SCROLL_MAX];
-static bool scroll(int tiles, bool more, struct Surface **last, IOSurfaceRef *before,
-                   IOSurfaceRef *shown)
+static void queue_reset(int tiles)
 {
-    int n = 0;
-
     memset(&present_sync, 0, sizeof(present_sync));
     present_sync.win_min = INT_MAX;
     present_sync.win_gap = present_sync.win_gap2 = INFINITY;
@@ -139,7 +129,23 @@ static bool scroll(int tiles, bool more, struct Surface **last, IOSurfaceRef *be
     present_tiles_on = tiles;
     present_trim_quarter = true;
     layer = NULL;
-    /* close frames: two go on the layer at once, the third starts the link */
+}
+
+/*
+ * A scroll in drawn frames (extra brightness, or a guest buffer that is no
+ * IOSurface): close frames link the queue (two go on the layer at once, the
+ * third starts the link), then a frame is left over after every tick until
+ * the quarter-second trim skips the one left over, which is the scroll's
+ * newest. With MORE a newer frame comes before the next tick. LAST: the frame
+ * the trim skipped; SHOWN: what the layer shows after that next tick. False if
+ * the trim did not skip the newest frame right after the tick showed the one
+ * before it.
+ */
+static bool scroll(int tiles, bool more, struct Surface **last, IOSurfaceRef *shown)
+{
+    int n = 0;
+
+    queue_reset(tiles);
     while (n < 4) {
         arrive(&scroll_frames[n++]);
     }
@@ -150,17 +156,16 @@ static bool scroll(int tiles, bool more, struct Surface **last, IOSurfaceRef *be
         }
         arrive(&scroll_frames[n++]);
     }
-    if (n == SCROLL_MAX || n < 2) {
+    if (n == SCROLL_MAX || layer != &scroll_frames[n - 2]) {
         return false;
     }
     *last = &scroll_frames[n - 1];
-    *before = layer;
     if (more) {
         arrive(&scroll_frames[n++]);
     }
     tick();
     *shown = layer;
-    return *before == &scroll_frames[n - (more ? 3 : 2)];
+    return true;
 }
 
 static bool all_free(void)
@@ -233,9 +238,9 @@ int main(void)
     /* The queue: the quarter-second trim skips the last frame of a scroll. */
     for (int tiles = 1; tiles >= 0; tiles--) {
         struct Surface *last;
-        IOSurfaceRef before, shown;
+        IOSurfaceRef shown;
         char what[200];
-        bool ran = scroll(tiles, false, &last, &before, &shown);
+        bool ran = scroll(tiles, false, &last, &shown);
         const char *on = present_tiles_on ? "tiles on" : "tiles off";
         snprintf(what, sizeof(what), "%s: the trim after a tick skips a scroll's newest drawn frame", on);
         check(what, ran);
@@ -244,7 +249,7 @@ int main(void)
         check(what, ran && shown == last);
         snprintf(what, sizeof(what), "%s: ... and every surface goes back", on);
         check(what, ran && all_free());
-        ran = scroll(tiles, true, &last, &before, &shown);
+        ran = scroll(tiles, true, &last, &shown);
         snprintf(what, sizeof(what),
                  "%s: ... with a newer frame before the next tick, that tick shows the newer "
                  "(the trim still saves a refresh)", on);
@@ -252,6 +257,22 @@ int main(void)
         snprintf(what, sizeof(what), "%s: ... and every surface goes back", on);
         check(what, ran && all_free());
     }
+
+    /*
+     * The link's first tick comes a second late with two frames queued: it shows the
+     * first, the once-a-second drop skips the second (left over in every tick of the
+     * window), and the frames came one at a time, which ends the link.
+     */
+    queue_reset(0);
+    for (int n = 0; n < 4; n++) {
+        arrive(&scroll_frames[n]);
+    }
+    clock_s += 1.0;
+    bool ticking = cocoa_gl_present_vsync(TICK_S);
+    check("a late first tick that skips the newest frame keeps the link for it",
+          layer == &scroll_frames[2] && ticking);
+    tick();
+    check("... and the next tick shows it", layer == &scroll_frames[3] && all_free());
 
     printf("%s\n", fails ? "test-present-direct: FAIL" : "test-present-direct: all ok");
     return fails != 0;
